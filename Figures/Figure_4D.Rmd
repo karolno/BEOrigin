@@ -1,0 +1,130 @@
+---
+title: "IPA_output BE undiff cells vs BE diff"
+author: "Karol"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float:
+      toc_collapsed: true
+    toc_depth: 3
+    number_sections: false
+    theme: paper
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+## Introduction
+
+This is output of the standard analysis of IPA. I am printing z-score of activation for transcriptional regulators with corrected p-value below 0.05. In the IPA, I did standard analysis with the only setting changed to Direct Interactions.
+
+IPA:
+Content version: 51963813 (Release Date: 2020-03-11)
+
+```{r setup, include=FALSE}
+# export RSTUDIO_PANDOC=/usr/lib/rstudio-server/bin/pando
+# Rscript -e "library(rmarkdown); render('FILE_NAME.Rmd')"
+knitr::opts_chunk$set(	echo=TRUE,
+                       results='asis',
+                       fig.align='center')
+```
+
+```{r setup, , echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE}
+library(ggplot2)
+files.dir<-"/home/karolno/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Figure_4/"
+location<-paste0(files.dir, "/Data/IPA/")
+
+```
+
+## Figure 4D top
+
+This is analysis of all the genes transcriptional regulators identified between the undifferentiated and differententiated cells of BE. Only IPA data. 
+
+Content version: 49932394 (Release Date: 2019-11-14)
+
+```{r process_4D, include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 14, fig.width= 10}
+#Read data
+all.data<-read.delim(file=paste0(location,"/IPA_S7_BE_DiffvUndiff_upstream.txt"),  skip = 2)
+#Calc log of p-values
+all.data$logp<- -log10(all.data$p.value.of.overlap)
+# all.data$p.adj<- p.adjust(all.data$p.value.of.overlap, method = "BH")
+# all.data$logq<- -log10(all.data$p.adj)
+all.data$logq<- -log10(all.data$B.H.corrected.p.value)
+
+
+all.data<-all.data[rev(order(all.data$Activation.z.score)),]
+all.data$no.genes<-sapply(as.character(all.data$Target.Molecules.in.Dataset), function(x) {length(unlist(strsplit(x, split = ",")))})
+
+type = "transcription regulator" 
+max=20
+data.tmp<-all.data[all.data$Molecule.Type==type,]
+data.tmp$Activation.z.score[is.na(data.tmp$Activation.z.score)]<-0
+
+data.tmp<-data.tmp[rev(order(data.tmp$Activation.z.score)),]
+#keep only data with corrected p-value below 0.05
+data.tmp<-data.tmp[data.tmp$B.H.corrected.p.value<0.05,]
+# data.tmp<-data.tmp[abs(data.tmp$Activation.z.score)>1,]
+
+
+data.tmp$test<-"Other"
+data.tmp$test[lapply(data.tmp$Upstream.Regulator, function(x) grep(pattern = "MYC\\b", x, perl = TRUE))>0]<-"MYC"
+data.tmp$test[lapply(data.tmp$Upstream.Regulator, function(x) grep(pattern = "HNF4", x))>0]<-"HNF4A"
+
+
+data.tmp$n<-1:nrow(data.tmp)
+
+
+p<-ggplot(data.tmp, aes(y= Activation.z.score, x= n, color = test))+geom_point()+scale_color_manual(values = c("#E41A1C" ,"#377EB8", "grey" ))+theme_bw()
+
+p
+
+ggsave(plot = p, file = paste0(files.dir, "./Figure_4DTop.pdf"),  width = 7, height = 6, useDingbats=FALSE)
+
+
+```
+
+## Figure 4D bottom
+
+Here I am using data from GSEA. 
+GSEA software version 4.0.3, C3 TF Database version 7.1
+
+
+
+```{r process, include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 14, fig.width= 10}
+#Read data
+GSEA.dir<-"/home/karolno/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Figure_4/Data/GSEA/BE_undiffvsdiff_C3TFmotifs.GseaPreranked.1585565155707/"
+
+all.data<-read.delim(file=paste0(GSEA.dir,"gsea_report_for_na_pos_1585565155707.xls"))
+all.data<-rbind(all.data,read.delim(file=paste0(GSEA.dir,"/gsea_report_for_na_neg_1585565155707.xls")))
+
+
+all.data$test<-"Other"
+all.data$test[lapply(all.data$GS.br..follow.link.to.MSigDB, function(x) grep(pattern = "MYC", x))>0]<-"MYC"
+all.data$test[lapply(all.data$GS.br..follow.link.to.MSigDB, function(x) grep(pattern = "HNF4", x))>0]<-"HNF4A"
+
+# all.data$test[is.na(all.data$test)]<-FALSE
+all.data<-all.data[rev(order(all.data$NES)),]
+
+all.data$n<-1:nrow(all.data)
+all.data<-all.data[rev(order(all.data$test)),]
+
+ggplot(all.data, aes(x= NES, y= FDR.q.val , color = test)) + geom_point()+scale_color_manual(values = c("#E41A1C" ,"#377EB8", "grey" ))+theme_bw()
+
+
+p<-ggplot(all.data, aes(y= NES, x= n, color = test))+geom_point()+scale_color_manual(values = c("#E41A1C" ,"#377EB8", "grey" ))+theme_bw()
+
+
+p
+ggsave(plot = p, file = paste0(files.dir, "./Figure_4Dbottom.pdf"),  width = 7, height = 6, useDingbats=FALSE)
+
+
+```
+
+
+## End Matters
+
+To finish get session info:
+```{r Endnote, echo=FALSE}
+sessionInfo()
+```

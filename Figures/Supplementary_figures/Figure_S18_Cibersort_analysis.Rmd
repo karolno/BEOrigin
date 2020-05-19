@@ -1,0 +1,231 @@
+---
+title: "Method validation pseudobulk of scRNA-seq against BE scRNA-seq"
+author: "Karol"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float:
+      toc_collapsed: true
+    toc_depth: 3
+    number_sections: false
+    theme: paper
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+## Introduction
+
+This file presents the data that was created by Figure_S18_Cibersort_prep.Rmd script. It will visualise the similarity between real output and the cell proportion calculated by Cibersort.
+
+
+```{r setup, include=FALSE}
+# export RSTUDIO_PANDOC=/usr/lib/rstudio-server/bin/pando
+# Rscript -e "library(rmarkdown); render('Figure_S18_Cibersort_analysis.Rmd')"
+knitr::opts_chunk$set(	echo=TRUE,
+                       results='asis',
+                       fig.align='center')
+```
+
+```{r setup, , echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE}
+#Environment setup
+library(pheatmap)
+library(RColorBrewer)
+library(reshape2)
+library(ggplot2)
+library(knitr)
+files.dir<-"~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Supplementary_figures/S18/"
+```
+
+
+## Relative Results Processing
+
+```{r process_relative, include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 15}
+#read all data from cibersort
+ciber.data <- as.matrix(read.delim("~/Dropbox/Postdoc/2019-12-29_BE2020/Results/CIBERSORT/OUT_all/CIBERSORT-Results.txt", row.names = 1))
+ciber.data<-ciber.data[order(row.names(ciber.data)),]
+
+removal<-c("P.value","Pearson.Correlation","RMSE", "Absolute.score", "Correlation" )
+ciber.data2<-ciber.data[,!(colnames(ciber.data) %in% removal)]
+
+#get information about the cell types
+colID<-sapply(colnames(ciber.data2), strsplit, "_")
+colID<-data.frame(matrix(unlist(colID), nrow=length(colID), byrow=T))
+rownames(colID)<-colnames(ciber.data2)
+colnames(colID)<-c("Tissue", "Cell Type")
+
+
+```
+
+## Relative Results - All
+
+### All cell types all tissues
+
+This image containes a relative score for each cluster fo cell types from each the tissue type. The rows are patients. THe most similar cell types are BE undifferentiated clusters.
+
+```{r, include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 15}
+
+cells <- read.delim("~/Dropbox/Postdoc/2019-12-29_BE2020/Results/CIBERSORT/Cell_proportions_all.txt", row.names = 1)
+
+cells<-cells[order(rownames(cells)),]
+
+breaksList5=seq(0, ceiling(max((ciber.data2), max((cells)))*40)/40, by = 0.025)
+
+
+pheatmap((ciber.data2), breaks = breaksList5,color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breaksList5)), main = "(Relative score)", cluster_rows = FALSE, cluster_cols = FALSE)
+
+
+pheatmap((cells), breaks = breaksList5,color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breaksList5)), main = "(true proportion)", cluster_rows = FALSE, cluster_cols = FALSE)
+
+```
+
+
+### Correlation between the data
+
+```{r, include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 15}
+
+tmp<-list()
+tmp2<-list()
+
+
+par(mfrow=c(3,4))
+for (i in row.names(cells)) {
+  tmp[[i]]<-cor.test(as.numeric((cells[i,colnames(ciber.data2)])), as.numeric((ciber.data2[i,])), method = "pearson", exact = FALSE)
+  tmp2[[i]]<-cor(as.numeric((cells[i,colnames(ciber.data2)])), as.numeric((ciber.data2[i,])), method = "pearson")
+  plot(as.numeric((cells[i,colnames(ciber.data2)])), as.numeric((ciber.data2[i,])), main = i, ylab = "(Cibersort data)", xlab = "(Real proportion)", xlim = c(0,max(as.numeric((cells[i,])), as.numeric((ciber.data2[i,])))+0.1), ylim = c(0,max(as.numeric((cells[i,])), as.numeric((ciber.data2[i,])))+0.1))
+}
+
+par(mfrow=c(1,1))
+cor.all<-cor((as.numeric(unlist(cells[,colnames(ciber.data2)]))), as.numeric((ciber.data2)), method = "pearson")
+
+dev.off()
+pdf(paste0(files.dir, ".//Figure_S18A.pdf"), useDingbats = FALSE)
+plot((as.numeric(unlist(cells[,colnames(ciber.data2)]))), as.numeric((ciber.data2)), main = "All data", ylab = "(Cibersort data)", xlab = "(Real proportion)", xlim = c(0,max((as.numeric(unlist(cells))), as.numeric((ciber.data2)))+0.1), ylim = c(0,max((as.numeric(unlist(cells))), as.numeric((ciber.data2)))+0.1))
+dev.off()
+
+kable((unlist(tmp2)))
+kable((cor.all), caption = "Global correlation")
+
+
+```
+
+
+### Collapsed tissues
+
+This image containes a relative score for each tissue (scores for clusters from each tissue were add)
+
+```{r, include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 15}
+
+ciberdata4<-as.data.frame(matrix(ncol = 6, nrow = nrow(ciber.data2)))
+colnames(ciberdata4)<-c("Sample","BE","NG","NE","SMG", "NonEpi")
+ciberdata4$Sample<-rownames(ciber.data2)
+ciberdata4$BE<-rowSums(ciber.data2[,colnames(ciber.data2) %in% rownames(colID)[colID$Tissue == "BE"]])
+ciberdata4$NG<-rowSums(ciber.data2[,colnames(ciber.data2) %in% rownames(colID)[colID$Tissue == "NG"]])
+ciberdata4$NE<-rowSums(ciber.data2[,colnames(ciber.data2) %in% rownames(colID)[colID$Tissue == "NE"]])
+ciberdata4$SMG<-rowSums(ciber.data2[,colnames(ciber.data2) %in% rownames(colID)[colID$Tissue == "SMG"]])
+#ciberdata4$NSCJ<-rowSums(ciber.data2[,colnames(ciber.data2) %in% rownames(colID)[colID$Tissue == "NSCJ"]])
+ciberdata4$NonEpi<-rowSums(ciber.data2[,colnames(ciber.data2) %in% rownames(colID)[colID$Tissue == "NonEpi"]])
+
+ciberdata4.2<-as.matrix(ciberdata4[,2:6])
+rownames(ciberdata4.2)<-ciberdata4$Sample
+
+#collapse cell data
+cells4<-as.data.frame(matrix(ncol = 6, nrow = nrow(cells)))
+colnames(cells4)<-c("Sample","BE","NG","NE","SMG", "NonEpi")
+cells4$Sample<-rownames(cells)
+cells4$BE<-rowSums(cells[,colnames(cells) %in% rownames(colID)[colID$Tissue == "BE"]])
+cells4$NG<-rowSums(cells[,colnames(cells) %in% rownames(colID)[colID$Tissue == "NG"]])
+cells4$NE<-rowSums(cells[,colnames(cells) %in% rownames(colID)[colID$Tissue == "NE"]])
+cells4$SMG<-rowSums(cells[,colnames(cells) %in% rownames(colID)[colID$Tissue == "SMG"]])
+# cells4$NSCJ<-rowSums(cells[,colnames(cells) %in% rownames(colID)[colID$Tissue == "NSCJ"]])
+cells4$NonEpi<-rowSums(cells[,colnames(cells) %in% rownames(colID)[colID$Tissue == "NonEpi"]])
+
+cells4.2<-as.matrix(cells4[,2:6])
+rownames(cells4.2)<-cells4$Sample
+
+breaksList5=seq(0, ceiling(max((ciberdata4.2), (cells4.2))*40)/40, by = 0.025)
+
+
+
+
+
+pheatmap((ciberdata4.2), breaks = breaksList5,color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breaksList5)), main = "(Relative score per tissue type)", cluster_rows = FALSE, cluster_cols = FALSE)
+
+
+pheatmap((cells4.2), breaks = breaksList5,color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breaksList5)), main = "(true proportion per tissue type)", cluster_rows = FALSE, cluster_cols = FALSE)
+
+
+par(mfrow=c(3,4))
+for (i in row.names(cells4.2)) {
+  tmp[[i]]<-cor.test(as.numeric((cells4.2[i,])), as.numeric((ciberdata4.2[i,])), method = "pearson", exact = FALSE)
+  tmp2[[i]]<-cor(as.numeric((cells4.2[i,])), as.numeric((ciberdata4.2[i,])), method = "pearson")
+  
+  plot(as.numeric((cells4.2[i,])), as.numeric((ciberdata4.2[i,])), main = i, ylab = "(Ciberdata)", xlab = "(Real proportion)", xlim = c(0,max(as.numeric((cells4.2[i,])), as.numeric((ciberdata4.2[i,])))+0.1), ylim = c(0,max(as.numeric((cells4.2[i,])), as.numeric((ciberdata4.2[i,])))+0.1))
+}
+
+cor.all<-cor(as.numeric((cells4.2)), as.numeric((ciberdata4.2)), method = "pearson")
+par(mfrow=c(1,1))
+plot(as.numeric((cells4.2)), as.numeric((ciberdata4.2)), main = "All data", ylab = "(Ciberdata)", xlab = "(Real proportion)", xlim = c(0,max(as.numeric((cells4.2)), as.numeric((ciberdata4.2)))+0.1), ylim = c(0,max(as.numeric((cells4.2)), as.numeric((ciberdata4.2)))+0.1))
+
+
+kable((unlist(tmp2)))
+kable((cor.all), caption = "Global correlation")
+
+par(mfrow=c(1,1))
+
+
+ciberdata5<-melt(ciberdata4, ID = "Sample", variable.name = "Tissue", value.name = "Proportion")
+ciberdata5$Tissue<-factor(ciberdata5$Tissue, levels = c("NE","SMG","NG","BE","NonEpi")) #NSCJ","ALL"))
+```
+
+As above but barchart
+
+```{r, include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 15}
+colour_vector <- vector(length = 8)  #7
+names(colour_vector) <- c("NG", "BSCJ", "NE","NSCJ", "BE", "ND","SMG", "NonEpi") 
+colour_vector["NG"] <- "#4DBBD5FF"
+colour_vector["BSCJ"] <- "#DC0000FF"
+colour_vector["NE"] <- "darkred"
+colour_vector["NSCJ"] <- "#F39B7FFF"
+colour_vector["BE"] <- "#00A087FF"
+colour_vector["ND"] <- "#3C5488FF"
+colour_vector["SMG"] <- "#B09C85FF"
+colour_vector["NonEpi"] <- "grey80"
+
+
+p<-ggplot(ciberdata5, aes(fill = Tissue, y = Proportion, x = Sample))+geom_bar(stat = "identity")+theme_bw()+theme(axis.text.x = element_text(angle  = 90, hjust = 1)) + ggtitle("Tissue Proportion")+scale_fill_manual(values=colour_vector)
+p
+ggsave(paste0(files.dir, "./Figure_S18B_1.pdf"), p, width = 15, height = 11)
+
+
+
+# dev.off()
+
+cells5<-melt(cells4, ID = "Sample", variable.name = "Tissue", value.name = "Proportion")
+cells5$Tissue<-factor(cells5$Tissue, levels = c("NE","SMG","NG","BE","NonEpi"))#,"NSCJ", "ALL"))
+
+
+p<-ggplot(cells5, aes(fill = Tissue, y = Proportion, x = Sample))+geom_bar(stat = "identity")+theme_bw()+theme(axis.text.x = element_text(angle  = 90, hjust = 1)) + ggtitle("True data per tissue")+scale_fill_manual(values=colour_vector)
+
+p
+ggsave(paste0(files.dir, "./Figure_S18B_2.pdf"), p, width = 15, height = 11)
+
+
+
+```
+
+
+
+
+## End Matters 
+
+To finish get session info:
+
+```{r Endnote, echo=FALSE}
+sessionInfo()
+```
+
+
+
+

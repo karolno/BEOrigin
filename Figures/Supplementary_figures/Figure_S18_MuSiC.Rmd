@@ -1,0 +1,407 @@
+---
+title: "Validation of RNA-seq with BE scRNA-seq - MuSiC Results"
+author: "Karol"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float:
+      toc_collapsed: true
+    toc_depth: 3
+    number_sections: false
+    theme: paper
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+## Introduction
+
+Here I am using MuSiC for deconvolution of data. Unlike Cibersort, this method does not require selection of marker genes (https://doi.org/10.1038/s41467-018-08023-x). I will make pseudobulk data from the scRNA-seq for the validation purpose.
+
+
+```{r setup, include=FALSE}
+# export RSTUDIO_PANDOC=/usr/lib/rstudio-server/bin/pando
+# Rscript -e "library(rmarkdown); render('Figure_S18_MuSiC.Rmd')"
+knitr::opts_chunk$set(	echo=TRUE,
+                       results='asis',
+                       fig.align='center')
+```
+
+```{r setup, , echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE}
+#Environment setup
+library(scran)
+library(MuSiC)
+library(pheatmap)
+library(Matrix)
+library(xbioc)
+library(RColorBrewer)
+library(reshape2)
+library(knitr)
+library(Rtsne)
+source("../../Analysis/Functions/auxiliary.R")
+files.dir<-"~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Supplementary_figures/S18/"
+```
+
+## Process single cell RNA-seq data.
+
+```{r process, include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 10}
+#read all data
+sce <- readRDS("~/Dropbox/Postdoc/2019-12-29_BE2020/All_corrected_sce_filtered.rds")
+
+# Exclude contaminating cells
+sce <- sce[,sce$include]
+
+#keep only cells from pure tissue types
+cur.sce<-sce[,colData(sce)$Tissue %in% c("NG","NE","BE", "SMG")]
+
+#replace "_" with "-" in names of cell types
+cur.sce$cell_type<-gsub("_","-",cur.sce$cell_type)
+cur.sce$cell_type_secondary<-gsub("_","-",cur.sce$cell_type_secondary)
+
+#keep only samples with 300 cells per tissue
+cur.sce$Patient_tissue<-paste(cur.sce$Patient, cur.sce$Tissue,sep = "_")
+cell.counts<-table(paste(cur.sce$Patient, cur.sce$Tissue,sep = "_"))
+cur.sce <- cur.sce[,cur.sce$Patient_tissue %in% names(cell.counts[cell.counts>300])]
+
+# I will also remove Myoepithelial cells (very small number of cells from a single patient)
+cur.sce<-cur.sce[,!(cur.sce$cell_type %in% c("Myo-epithelial"))]
+
+
+#######################
+# Identify markers of immune and stromal cells across all tissue types. It will ignore tissue specificity associated with individual tissue types
+# Batch correction
+sce.list <- split.sce(cur.sce, unique(cur.sce$Sample), colData.name = "Sample")
+
+# Order sce objects for batch correction
+sce.list <- sce.list[order(unlist(lapply(sce.list, ncol)), decreasing = TRUE)]
+
+n <- names(sce.list)
+sce.list <- sce.list[c(which(grepl("NE_out", n)), which(grepl("NG_out", n)),
+                       which(grepl("BE_out", n)), which(grepl("SMG_out", n)))]
+
+corrected <- batch.correction(sce.list)
+cur.sce <- do.call("cbind", sce.list)
+
+# Compute new tSNE
+set.seed(12345)
+tsne <- Rtsne(t(corrected), pca = FALSE, perplexity = 250)
+# Clustering on corrected data
+g <- buildSNNGraph(corrected, k = 10)
+clusters <- igraph::cluster_louvain(g)$membership
+
+# Check what clusters overlap with nonepithelial cell types
+tmp<-reshape2::dcast(plyr::count(cbind(clusters,cur.sce$tissue_type)), formula = x.clusters ~ x.V2, fill = 0)
+nonepi_clust<-tmp$x.clusters[tmp$NonEpithelial == apply(as.matrix(tmp[,2:5]), 1, max)]
+# View(tmp)
+
+# Exclude immune and stromal clusters
+ImmuneTF <- clusters
+ImmuneTF <- ifelse(ImmuneTF %in% nonepi_clust, "nonepi", "epi")
+
+
+# Visualize clustering with low alpha for immune and stromal cells
+ggplot(data.frame(tSNE1 = tsne$Y[,1],
+                  tSNE2 = tsne$Y[,2],
+                  clusters = as.factor(clusters),
+                  ImmuneTF =ImmuneTF)) + 
+  geom_point(aes(tSNE1, tSNE2, colour = clusters, alpha = ImmuneTF), size = 0.5) +
+  scale_alpha_manual(values = c("epi" = 1 , "nonepi" = 0.05)) 
+
+
+# Visualize tsne
+p.all.cells <- ggplot(data.frame(tsne1 = tsne$Y[,1],
+                                 tsne2 = tsne$Y[,2],
+                                 tissue = colData(cur.sce)$Tissue,
+                                 ImmuneTF =ImmuneTF)) + 
+  geom_point(aes(tsne1, tsne2, alpha = ImmuneTF), colour = "black", size = 1) + 
+  geom_point(aes(tsne1, tsne2, colour = tissue, alpha = ImmuneTF), size = 0.5) + 
+  scale_color_manual(values = metadata(cur.sce)$colour_vector) + 
+  scale_alpha_manual(values = c("epi" = 1 , "nonepi" = 0.05)) +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        axis.line = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        legend.background = element_blank(),
+        legend.key = element_blank()
+  ) + 
+  xlab("t-SNE 1")  + 
+  ylab("t-SNE 2") + 
+  guides(colour = guide_legend(override.aes = list(size=4), title = "Tissue")
+  )
+
+p.all.cells
+
+
+
+# #replace tissue names for a generic names for immune and stromal cells
+cur.sce$Tissue[cur.sce$cell_type %in% c("Immune","Stromal") & ImmuneTF == "nonepi"]<-"NonEpi"
+
+cur.sce$cell_type_secondary[cur.sce$cell_type  %in% c("Stromal", "Immune") & ImmuneTF == "nonepi"] <- paste0("C",clusters[cur.sce$cell_type  %in% c("Stromal", "Immune") & ImmuneTF == "nonepi"])
+# the above does not work for two cells that in tissue specific clustering are considered to be immune cells but here fall into other clusters
+# Remove cell types that do not match new annotation (exactly two cells in NE that were annotated as T-cells)
+cur.sce <- cur.sce[,!(cur.sce$cell_type %in% c("Immune","Stromal") & ImmuneTF != "nonepi")]
+
+
+
+#tracking names
+cur.sce$cell.types<-(paste0(cur.sce$Tissue,"_",cur.sce$cell_type_secondary))
+cur.sce$cell.groups<-(paste0(cur.sce$Tissue,"_",cur.sce$cell_type_secondary,"_",cur.sce$Patient))
+
+#create phenotype matrix
+pheno.matrix<-colData(cur.sce)[,c(3,4,16,17,18,22,23,24)]
+
+#annotate phenotypes
+metadata <- data.frame(labelDescription= c("Patient ID", "Tissue ID", "Tissue cluster", "Cell Type", "Cell Type Secondary", "Tissue Type", "Cell Type 2", "Cell Group"), row.names=colnames(pheno.matrix))
+
+#create Expression set for the input into MuSiC
+cur.sce1<-ExpressionSet(assayData = as.matrix(counts(cur.sce)), phenoData = new("AnnotatedDataFrame", data = as.data.frame(pheno.matrix), varMetadata = metadata) )
+```
+
+## Prepare pseudobulk data from scRNA-seq
+
+### Prepare pseudobulk data for MuSiC
+
+```{r , include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 10}
+#tracking names
+cell.types<-(paste0(cur.sce$Tissue,"_",cur.sce$cell_type_secondary))
+cell.groups<-(paste0(cur.sce$Tissue,"_",cur.sce$cell_type_secondary,"_",cur.sce$Patient))
+# Sum counts with each batch and group
+mat <- matrix(data = NA, ncol = length(unique(cell.groups)), 
+              nrow = nrow(counts(cur.sce)))
+rownames(mat) <- rownames(counts(cur.sce))
+colnames(mat) <- unique(cell.groups)
+#Calculate the proportion of cells and counts
+for(j in colnames(mat)){
+  cur_tissue <- unlist(strsplit(j, "_"))[1]
+  
+  cur_type <- unlist(strsplit(j, "_"))[2]
+  
+  cur_patient <- unlist(strsplit(j, "_"))[3]
+  
+  mat[,j] <- Matrix::rowSums(as.matrix(counts(cur.sce)[,colData(cur.sce)$Patient == cur_patient 
+                                                       & colData(cur.sce)$Tissue == cur_tissue 
+                                                       & colData(cur.sce)$cell_type_secondary == cur_type]
+  ))
+}
+
+
+# Sum counts with each batch and group
+matb <- matrix(data = 0, ncol = length(unique(cur.sce$Patient)), 
+               nrow = nrow(counts(cur.sce)))
+rownames(matb) <- rownames(counts(cur.sce))
+colnames(matb) <- unique(cur.sce$Patient)
+
+for(j in colnames(mat)){
+  cur_patient <- unlist(strsplit(j, "_"))[3]
+  matb[,cur_patient] <- matb[,cur_patient] + mat[,j]
+}
+
+#create expression set
+data.all1<-ExpressionSet(assayData = as.matrix(matb)) 
+```
+
+
+
+### Cell type proportion
+
+```{r cell_prop, include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 10}
+#I need proportion of different cell types per patient to figure out if MuSiC can produce similar patters
+mat.typeb <- matrix(data = 0, ncol = length(unique(cell.types)), 
+                    nrow = length(unique(cur.sce$Patient)))
+rownames(mat.typeb) <- unique(cur.sce$Patient)
+colnames(mat.typeb) <- unique(cell.types)
+
+for (i in colnames(mat.typeb)) {
+  cur_tissue <- unlist(strsplit(i, "_"))[1]
+  cur_type <- unlist(strsplit(i, "_"))[2]
+  mat.typeb[,i]<-table(factor(cur.sce$Patient[cur.sce$cell_type_secondary == cur_type & cur.sce$Tissue == cur_tissue], levels = rownames(mat.typeb)))
+}
+
+mat.typeb<-mat.typeb/rowSums(mat.typeb)
+
+write.table(mat.typeb, file = "~/Dropbox/Postdoc/2019-12-29_BE2020/Results/MuSiC/Cell_proportions_MuSiC_all.txt", quote = FALSE, sep = "\t", row.names = TRUE, col.names = NA)
+```
+
+
+## Run MuSiC
+
+
+```{r music , include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 10}
+
+cell.prop<-music_prop(bulk.eset = data.all1, sc.eset = cur.sce1, clusters = "cell.types", samples = "Patient", select.ct = unique(cur.sce1$cell.types))
+saveRDS(cell.prop, file = "~/Dropbox/Postdoc/2019-12-29_BE2020/Results/MuSiC//MuSiC_Validation_all.rds")
+
+plot.data2<-data.matrix(cell.prop$Est.prop.weighted)
+plot.data2<-plot.data2[order(rownames(plot.data2)),]
+
+#get information about the cell types
+colID<-sapply(colnames(plot.data2), strsplit, "_")
+colID<-data.frame(matrix(unlist(colID), nrow=length(colID), byrow=T))
+rownames(colID)<-colnames(plot.data2)
+colnames(colID)<-c("Tissue", "Cell Type")
+
+cells<-mat.typeb
+cells<-cells[order(rownames(cells)),]
+
+```
+
+
+## Relative Results - All
+
+### All cell types all tissues
+
+This image containes a relative score for each cluster fo cell types from each the tissue type. The rows are patients. THe most similar cell types are BE undifferentiated clusters.
+
+```{r, include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 15}
+breaksList5=seq(0, ceiling(max((plot.data2), (cells))*40)/40, by = 0.025)
+breaksListZ=seq(-2, 2, by = 0.1)
+pheatmap((plot.data2), breaks = breaksList5,color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breaksList5)), main = "(Relative score)", cluster_rows = FALSE, cluster_cols = FALSE)
+pheatmap((cells), breaks = breaksList5,color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breaksList5)), main = "(true proportion)", cluster_rows = FALSE, cluster_cols = FALSE)
+
+```
+
+### Correlation between the data
+
+```{r, include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 15}
+tmp<-list()
+tmp2<-list()
+
+par(mfrow=c(3,4))
+for (i in row.names(cells)) {
+  tmp[[i]]<-cor.test(as.numeric((cells[i,colnames(plot.data2)])), as.numeric((plot.data2[i,])), method = "pearson", exact = FALSE)
+  tmp2[[i]]<-cor(as.numeric((cells[i,colnames(plot.data2)])), as.numeric((plot.data2[i,])), method = "pearson")
+  plot(as.numeric((cells[i,colnames(plot.data2)])), as.numeric((plot.data2[i,])), main = i, ylab = "(MuSiC data)", xlab = "(Real proportion)", xlim = c(0,max(as.numeric((cells[i,])), as.numeric((plot.data2[i,])))+0.1), ylim = c(0,max(as.numeric((cells[i,])), as.numeric((plot.data2[i,])))+0.1))
+}
+
+par(mfrow=c(1,1))
+cor.all<-cor((as.numeric(unlist(cells[,colnames(plot.data2)]))), as.numeric((plot.data2)), method = "pearson")
+
+dev.off()
+pdf(paste0(files.dir, "./Figure_S18A_MuSiC.pdf"), useDingbats = FALSE)
+
+plot((as.numeric(unlist(cells[,colnames(plot.data2)]))), as.numeric((plot.data2)), main = "All data", ylab = "(MuSiC data)", xlab = "(Real proportion)", xlim = c(0,max((as.numeric(unlist(cells))), as.numeric((plot.data2)))+0.1), ylim = c(0,max((as.numeric(unlist(cells))), as.numeric((plot.data2)))+0.1))
+
+dev.off()
+kable((unlist(tmp2)))
+kable((cor.all), caption = "Global correlation")
+
+
+```
+
+
+### Collapsed tissues
+
+This image containes a relative score for each tissue (scores for clusters from each tissue were add)
+
+```{r, include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 15}
+
+plotdata4<-as.data.frame(matrix(ncol = 6, nrow = nrow(plot.data2)))
+colnames(plotdata4)<-c("Sample","BE","NG","NE","SMG","NonEpi")
+plotdata4$Sample<-rownames(plot.data2)
+plotdata4$BE<-rowSums(plot.data2[,colnames(plot.data2) %in% rownames(colID)[colID$Tissue == "BE"]])
+plotdata4$NG<-rowSums(plot.data2[,colnames(plot.data2) %in% rownames(colID)[colID$Tissue == "NG"]])
+plotdata4$NE<-rowSums(plot.data2[,colnames(plot.data2) %in% rownames(colID)[colID$Tissue == "NE"]])
+plotdata4$SMG<-rowSums(plot.data2[,colnames(plot.data2) %in% rownames(colID)[colID$Tissue == "SMG"]])
+plotdata4$NonEpi<-rowSums(plot.data2[,colnames(plot.data2) %in% rownames(colID)[colID$Tissue == "NonEpi"]])
+
+plotdata4.2<-as.matrix(plotdata4[,2:6])
+rownames(plotdata4.2)<-plotdata4$Sample
+breaksList5=seq(0, ceiling(max((plotdata4.2))*40)/40, by = 0.025)
+
+#collapse cell data
+cells4<-as.data.frame(matrix(ncol = 6, nrow = nrow(cells)))
+colnames(cells4)<-c("Sample","BE","NG","NE","SMG", "NonEpi")
+cells4$Sample<-rownames(cells)
+cells4$BE<-rowSums(cells[,colnames(cells) %in% rownames(colID)[colID$Tissue == "BE"]])
+cells4$NG<-rowSums(cells[,colnames(cells) %in% rownames(colID)[colID$Tissue == "NG"]])
+cells4$NE<-rowSums(cells[,colnames(cells) %in% rownames(colID)[colID$Tissue == "NE"]])
+cells4$SMG<-rowSums(cells[,colnames(cells) %in% rownames(colID)[colID$Tissue == "SMG"]])
+cells4$NonEpi<-rowSums(cells[,colnames(cells) %in% rownames(colID)[colID$Tissue == "NonEpi"]])
+
+cells4.2<-as.matrix(cells4[,2:6])
+rownames(cells4.2)<-cells4$Sample
+breaksList5=seq(0, ceiling(max((plotdata4.2), (cells4.2))*40)/40, by = 0.025)
+
+```
+
+
+
+```{r, include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 15}
+
+pheatmap((plotdata4.2), breaks = breaksList5,color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breaksList5)), main = "(Relative score per tissue type)", cluster_rows = FALSE, cluster_cols = FALSE)
+
+pheatmap((cells4.2), breaks = breaksList5,color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breaksList5)), main = "(true proportion per tissue type)", cluster_rows = FALSE, cluster_cols = FALSE)
+
+par(mfrow=c(3,4))
+for (i in row.names(cells4.2)) {
+  tmp[[i]]<-cor.test(as.numeric((cells4.2[i,])), as.numeric((plotdata4.2[i,])), method = "pearson", exact = FALSE)
+  tmp2[[i]]<-cor(as.numeric((cells4.2[i,])), as.numeric((plotdata4.2[i,])), method = "pearson")
+  plot(as.numeric((cells4.2[i,])), as.numeric((plotdata4.2[i,])), main = i, ylab = "(Ciberdata)", xlab = "(Real proportion)", xlim = c(0,max(as.numeric((cells4.2[i,])), as.numeric((plotdata4.2[i,])))+0.1), ylim = c(0,max(as.numeric((cells4.2[i,])), as.numeric((plotdata4.2[i,])))+0.1))
+  
+  
+}
+cor.all<-cor(as.numeric((cells4.2)), as.numeric((plotdata4.2)), method = "pearson")
+
+
+plot(as.numeric((cells4.2)), as.numeric((plotdata4.2)), main = "All data", ylab = "(Ciberdata)", xlab = "(Real proportion)", xlim = c(0,max(as.numeric((cells4.2)), as.numeric((plotdata4.2)))+0.1), ylim = c(0,max(as.numeric((cells4.2)), as.numeric((plotdata4.2)))+0.1))
+
+kable((unlist(tmp2)))
+kable((cor.all), caption = "Global correlation")
+par(mfrow=c(1,1))
+
+ciberdata5<-melt(plotdata4, ID = "Sample", variable.name = "Tissue", value.name = "Proportion")
+ciberdata5$Tissue<-factor(ciberdata5$Tissue, levels = c("NE","SMG","NG","BE","NonEpi"))
+```
+
+As above but barchart
+
+```{r, include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 15}
+colour_vector <- vector(length = 8)  #7
+names(colour_vector) <- c("NG", "BSCJ", "NE","NSCJ", "BE", "ND","SMG", "NonEpi") 
+colour_vector["NG"] <- "#4DBBD5FF"
+colour_vector["BSCJ"] <- "#DC0000FF"
+colour_vector["NE"] <- "darkred"
+colour_vector["NSCJ"] <- "#F39B7FFF"
+colour_vector["BE"] <- "#00A087FF"
+colour_vector["ND"] <- "#3C5488FF"
+colour_vector["SMG"] <- "#B09C85FF"
+colour_vector["NonEpi"] <- "grey80"
+
+
+
+
+
+
+p<-ggplot(ciberdata5, aes(fill = Tissue, y = Proportion, x = Sample))+geom_bar(stat = "identity")+theme_bw()+theme(axis.text.x = element_text(angle  = 90, hjust = 1)) + ggtitle("Tissue Proportion")+scale_fill_manual(values=colour_vector)
+p
+ggsave(paste0(files.dir, "./Figure_S18B_1_MuSiC.pdf"), p, width = 15, height = 11)
+
+# dev.off()
+cells5<-melt(cells4, ID = "Sample", variable.name = "Tissue", value.name = "Proportion")
+cells5$Tissue<-factor(cells5$Tissue, levels = c("NE","SMG","NG","BE","NonEpi"))
+
+
+p<-ggplot(cells5, aes(fill = Tissue, y = Proportion, x = Sample))+geom_bar(stat = "identity")+theme_bw()+theme(axis.text.x = element_text(angle  = 90, hjust = 1)) + ggtitle("True data per tissue")+scale_fill_manual(values=colour_vector)
+p
+ggsave(paste0(files.dir, "./Figure_S18B_2_MuSiC.pdf"), p, width = 15, height = 11)
+
+
+```
+
+## End Matters
+
+
+To finish get session info:
+
+```{r Endnote, echo=FALSE}
+sessionInfo()
+```
+
+
+
+
+
+

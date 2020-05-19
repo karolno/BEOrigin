@@ -1,0 +1,85 @@
+---
+title: "IPA_output BE undiff cells vs GC undiff"
+author: "Karol"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float:
+      toc_collapsed: true
+    toc_depth: 3
+    number_sections: false
+    theme: paper
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+## Introduction
+
+This is output of the standard analysis of IPA. I am printing p-values for the top 20 upstream regulators that are transcriptional regulators. In the IPA, I did standard analysis with the only setting changed to Direct Interactions.
+
+IPA:
+Content version: 51963813 (Release Date: 2020-03-11)
+
+```{r setup, include=FALSE}
+# export RSTUDIO_PANDOC=/usr/lib/rstudio-server/bin/pando
+# Rscript -e "library(rmarkdown); render('FILE_NAME.Rmd')"
+knitr::opts_chunk$set(	echo=TRUE,
+                       results='asis',
+                       fig.align='center')
+```
+
+```{r setup, , echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE}
+library(ggplot2)
+files.dir<-"/home/karolno/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Figure_4/"
+location<-paste0(files.dir, "/Data/IPA")
+
+```
+
+## Figure 4C
+
+```{r process_4C, include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 14, fig.width= 10}
+#Read data
+all.data<-read.delim(file=paste0(location,"/IPA_S7_Undiff_BEvNG_upstream.txt"),  skip = 2)
+#Calc log of p-values
+all.data$logp<- -log10(all.data$p.value.of.overlap)
+# all.data$p.adj<- p.adjust(all.data$p.value.of.overlap, method = "BH")
+# all.data$logq<- -log10(all.data$p.adj)
+all.data$logq<- -log10(all.data$B.H.corrected.p.value)
+
+
+all.data<-all.data[rev(order(all.data$logq)),]
+all.data$no.genes<-sapply(as.character(all.data$Target.Molecules.in.Dataset), function(x) {length(unlist(strsplit(x, split = ",")))})
+
+type = "transcription regulator" 
+max=20
+data.tmp<-all.data[all.data$Molecule.Type==type,]
+data.tmp$Activation.z.score[is.na(data.tmp$Activation.z.score)]<-0
+#keep only data with the positive z-score
+data.tmp<-data.tmp[data.tmp$Activation.z.score>0,]
+#check if there are 20 elements in the group
+if(nrow(data.tmp)<=max){max<-nrow(data.tmp)}
+data.tmp<-data.tmp[data.tmp$Molecule.Type==type,][1:max,]
+
+p<-ggplot(data=data.tmp, aes(x=Upstream.Regulator, y=logq,  label = no.genes))+
+  geom_bar(stat = "identity" , color = "black", fill = "black", width = 0.5)+coord_flip()           
+p<-p  + scale_x_discrete(limits=rev(data.tmp$Upstream.Regulator))
+p<-p+ggtitle(label = type)+ylab(label = "-Log10(q-value)") + xlab(label = type)+geom_text(hjust = -.5)+ theme_bw()
+
+p
+
+
+
+
+ggsave(plot = p, file = paste0(files.dir, "./Figure_4C.pdf"),  width = 8, height = 10, useDingbats=FALSE)
+
+
+```
+
+## End Matters
+
+To finish get session info:
+```{r Endnote, echo=FALSE}
+sessionInfo()
+```

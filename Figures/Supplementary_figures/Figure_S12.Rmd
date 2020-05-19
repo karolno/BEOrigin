@@ -1,0 +1,522 @@
+---
+title: "Figure S12: Similarity between BE and all other tissues"
+author: "Karol Nowicki-Osuch, based on Nils Eling's code"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float:
+      toc_collapsed: true
+    toc_depth: 3
+    number_sections: false
+    theme: paper
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Here, we perform additional analyses on the similarity between BE and all other tissues.
+
+# Read in the data
+
+```{r libraries, message=FALSE}
+library(scran)
+library(scater)
+library(DropletUtils)
+library(openxlsx)
+library(Rtsne)
+library(pheatmap)
+library(viridis)
+library(ape)
+library(batchelor)
+source("../../Analysis/Functions/auxiliary.R")
+
+sce <- readRDS("~/Dropbox/Postdoc/2019-12-29_BE2020/All_corrected_sce_filtered.rds")
+
+# Exclude contaminating cells
+sce <- sce[,sce$include]
+
+# Exclude duodenum cells
+sce <- sce[,colData(sce)$Tissue != "ND"]
+```
+
+# Plot circular dendrogram of all clusters
+
+To estimate the similarity between all cell types, we compute an averaged expression profile for each cell-type and perform hierarchical cluster analysis.
+Here, we calculate this on the non-batch corrected counts and thereby incorporating the inter-patient variation.
+We will first plot the dendogram across all genes, removing lowly expressed genes
+
+```{r}
+# Remove non-expressed genes
+sce <- sce[Matrix::rowMeans(counts(sce)) > 0,]
+
+# Normalize across all cells
+# We provide the cell-types as clusters
+sce <- computeSumFactors(sce, clusters=paste(sce$Tissue, sce$cell_type, sep = "_"))
+sce <- logNormCounts(sce, log = FALSE)#, return_log = FALSE)
+
+clusters <- paste(colData(sce)$Tissue, colData(sce)$Tissue_cluster, sep = "_")
+mat <- matrix(data = NA, ncol = length(unique(clusters)), nrow = nrow(sce))
+colnames(mat) <- unique(clusters)
+
+for(i in unique(clusters)){
+  mat[,i] <- Matrix::rowMeans(normcounts(sce)[,clusters == i])
+}
+
+# Rename the matrix to contain the actual cell-type labels
+for(i in 1:ncol(mat)){
+  colnames(mat)[i] <- unique(sce$cell_type[sce$Tissue == sub("_[0-9]*$", "", colnames(mat)[i]) &
+                                 sce$Tissue_cluster == sub("^[A-Z2]*_", "", colnames(mat)[i])])
+}
+
+# Calculate spearman correlation between cell types
+dend <- hclust(as.dist(sqrt(1 - cor(log2(mat + 1), method = "spearman"))/2), method = "ward.D2")
+
+dev.off()
+pdf("~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Supplementary_figures/S12/Tree_all_genes.pdf", width = 10, height = 10, useDingbats = FALSE)
+plot(as.phylo(dend), type = "fan", 
+     tip.color = metadata(sce)$colour_vector[sub("_[0-9]*$", "", unique(clusters))])
+dev.off()
+```
+
+Next we will use the same genes as the ones for batch correction.
+
+```{r}
+clusters <- paste(colData(sce)$Tissue, colData(sce)$Tissue_cluster, sep = "_")
+
+# Find highly variable genes
+# Load sce again to keep internal normalization intact
+sce.new <- readRDS("~/Dropbox/Postdoc/2019-12-29_BE2020/All_corrected_sce_filtered.rds")
+sce.new <- sce.new[,sce.new$include]
+
+# Exclude duodenum cells
+sce.new <- sce.new[,colData(sce.new)$Tissue != "ND"]
+
+
+sce.list <- split.sce(sce.new, unique(sce.new$Sample), colData.name = "Sample")
+
+# Compute the top 1000 shared highly variable genes - use the new code for scran
+HVG.genes <- lapply(sce.list, function(n){
+  HVG <- modelGeneVar(n)
+  HVG
+})
+  
+HVG.df <- do.call("combineVar", HVG.genes)
+HVG.df <- HVG.df[order(HVG.df$bio, decreasing = TRUE),]
+genes <- rownames(HVG.df)[1:1000]
+
+mat <- matrix(data = NA, ncol = length(unique(clusters)), nrow = 1000)
+colnames(mat) <- unique(clusters)
+
+for(i in unique(clusters)){
+  mat[,i] <- Matrix::rowMeans(normcounts(sce)[genes,clusters == i])
+}
+
+# Rename the matrix to contain the actual cell-type labels
+for(i in 1:ncol(mat)){
+  colnames(mat)[i] <- unique(sce$cell_type[sce$Tissue == sub("_[0-9]*$", "", colnames(mat)[i]) &
+                                 sce$Tissue_cluster == sub("^[A-Z2]*_", "", colnames(mat)[i])])
+}
+
+# Calculate spearman correlation between cell types
+dend <- hclust(as.dist(sqrt(1 - cor(log2(mat + 1), method = "spearman"))/2), method = "ward.D2")
+
+dev.off()
+pdf("~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Supplementary_figures/S12/Tree_HVG.pdf", width = 10, height = 10, useDingbats = FALSE)
+plot(as.phylo(dend), type = "fan", 
+     tip.color = metadata(sce)$colour_vector[sub("_[0-9]*$", "", unique(clusters))])
+dev.off()
+```
+
+# Multi-batch scaling
+
+We next scale the batches as a way to remove batch effects. 
+
+```{r}
+# Read in the data
+sce <- readRDS("~/Dropbox/Postdoc/2019-12-29_BE2020/All_corrected_sce_filtered.rds")
+
+# Exclude contaminating cells
+sce <- sce[,sce$include]
+
+# Exclude duodenum cells
+sce <- sce[,colData(sce)$Tissue != "ND"]
+
+
+
+# Split the object into batches
+sce.list <- split.sce(sce, unique(sce$Sample), colData.name = "Sample")
+
+# Scale batches
+library(batchelor)
+func <- paste0("batchelor::multiBatchNorm(", 
+                     paste0("sce.list[[", 1:length(sce.list), "]]", collapse=", "), 
+                     ")")
+sce.scaled <- eval( parse(text=func) )
+
+# Merge these datasets
+sce <- do.call("cbind", sce.scaled)
+
+# Remove non-expressed genes
+sce <- sce[Matrix::rowMeans(counts(sce)) > 0,]
+
+# Normalize across all cells
+# We provide the cell-types as clusters
+sce <- computeSumFactors(sce, clusters=paste(sce$Tissue, sce$cell_type, sep = "_"))
+sce <- logNormCounts(sce, log = FALSE)
+```
+
+We next repeat the analysis as above.
+First, we calculate a consensus transcriptome for each cell-type based on all genes.
+
+```{r}
+clusters <- paste(colData(sce)$Tissue, colData(sce)$Tissue_cluster, sep = "_")
+mat <- matrix(data = NA, ncol = length(unique(clusters)), nrow = nrow(sce))
+colnames(mat) <- unique(clusters)
+
+for(i in unique(clusters)){
+  mat[,i] <- Matrix::rowMeans(normcounts(sce)[,clusters == i])
+}
+
+# Rename the matrix to contain the actual cell-type labels
+for(i in 1:ncol(mat)){
+  colnames(mat)[i] <- unique(sce$cell_type[sce$Tissue == sub("_[0-9]*$", "", colnames(mat)[i]) &
+                                 sce$Tissue_cluster == sub("^[A-Z2]*_", "", colnames(mat)[i])])
+}
+
+# Calculate spearman correlation between cell types
+dend <- hclust(as.dist(sqrt(1 - cor(log2(mat + 1), method = "spearman"))/2), method = "ward.D2")
+
+dev.off()
+pdf("~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Supplementary_figures/S12/Tree_all_genes.batch_scaled.pdf", width = 10, height = 10, useDingbats = FALSE)
+plot(as.phylo(dend), type = "fan", 
+     tip.color = metadata(sce)$colour_vector[sub("_[0-9]*$", "", unique(clusters))])
+dev.off()
+```
+
+Now with the HVGs.
+
+```{r}
+clusters <- paste(colData(sce)$Tissue, colData(sce)$Tissue_cluster, sep = "_")
+
+# Find highly variable genes
+# Load sce again to keep internal normalization intact
+sce.new <- readRDS("~/Dropbox/Postdoc/2019-12-29_BE2020/All_corrected_sce_filtered.rds")
+
+sce.new <- sce.new[,sce.new$include]
+# Exclude duodenum cells
+sce.new <- sce.new[,colData(sce.new)$Tissue != "ND"]
+
+
+sce.list <- split.sce(sce.new, unique(sce.new$Sample), colData.name = "Sample")
+
+# Compute the top 1000 shared highly variable genes - use the new code for scran
+HVG.genes <- lapply(sce.list, function(n){
+  HVG <- modelGeneVar(n)
+  HVG
+})
+   
+HVG.df <- do.call("combineVar", HVG.genes)
+HVG.df <- HVG.df[order(HVG.df$bio, decreasing = TRUE),]
+genes <- rownames(HVG.df)[1:1000]
+
+mat <- matrix(data = NA, ncol = length(unique(clusters)), nrow = 1000)
+colnames(mat) <- unique(clusters)
+
+for(i in unique(clusters)){
+  mat[,i] <- Matrix::rowMeans(normcounts(sce)[genes,clusters == i])
+}
+
+# Rename the matrix to contain the actual cell-type labels
+for(i in 1:ncol(mat)){
+  colnames(mat)[i] <- unique(sce$cell_type[sce$Tissue == sub("_[0-9]*$", "", colnames(mat)[i]) &
+                                 sce$Tissue_cluster == sub("^[A-Z2]*_", "", colnames(mat)[i])])
+}
+
+# Calculate spearman correlation between cell types
+dend <- hclust(as.dist(sqrt(1 - cor(log2(mat + 1), method = "spearman"))/2), method = "ward.D2")
+
+dev.off()
+pdf("~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Supplementary_figures/S12/Tree_HVG.batch_scaled.pdf", width = 10, height = 10, useDingbats = FALSE)
+plot(as.phylo(dend), type = "fan", 
+     tip.color = metadata(sce)$colour_vector[sub("_[0-9]*$", "", unique(clusters))])
+dev.off()
+```
+
+# Different number of HVG
+
+Here, I will use different sets of genes to show that the batch correction is independent from the chosen gene set.
+
+```{r batch-correction}
+all_sce <- readRDS("~/Dropbox/Postdoc/2019-12-29_BE2020/All_corrected_sce_filtered.rds")
+
+all_sce <- all_sce[,all_sce$include]
+
+# Exclude duodenum cells
+all_sce <- all_sce[,colData(all_sce)$Tissue != "ND"]
+
+
+
+sce.list <- split.sce(sce = all_sce, groups = unique(all_sce$Sample), colData.name = "Sample")
+
+# Order sce objects for batch correction
+sce.list <- sce.list[order(unlist(lapply(sce.list, ncol)), decreasing = TRUE)]
+
+n <- names(sce.list)
+sce.list <- sce.list[c(which(grepl("NSCJ_out", n)), which(grepl("BSCJ_out", n)), 
+                       which(grepl("NE_out", n)), which(grepl("NG_out", n)),
+                       which(grepl("BE_out", n)), which(grepl("SMG_out", n)))]
+
+
+# Combine sce objects
+all_sce <- do.call("cbind", sce.list)
+  
+# Batch correction
+corrected_1 <- batch.correction(sce.list, number.HVG = 500)
+corrected_2 <- batch.correction(sce.list, number.HVG = 2000)
+
+# Compute tsne on corrected counts
+set.seed(1234)
+# tsne_1 <- Rtsne(t(corrected_1), pca = FALSE)
+# tsne_2 <- Rtsne(t(corrected_2), pca = FALSE)
+
+# dendogram analysis
+clusters <- paste(colData(all_sce)$Tissue, colData(all_sce)$Tissue_cluster, sep = "_")
+mat_1 <- mat_2 <- matrix(data = NA, ncol = length(unique(clusters)), nrow = nrow(corrected_1))
+colnames(mat_1) <- colnames(mat_2) <- unique(clusters)
+
+for(i in unique(clusters)){
+  mat_1[,i] <- rowMeans(corrected_1[,clusters == i])
+  mat_2[,i] <- rowMeans(corrected_2[,clusters == i])
+}
+
+# Rename the matrix to contain the actual cell-type labels
+for(i in 1:ncol(mat_1)){
+  colnames(mat_1)[i] <- unique(all_sce$cell_type[all_sce$Tissue == sub("_[0-9]*$", "", colnames(mat_1)[i]) &
+                                 all_sce$Tissue_cluster == sub("^[A-Z2]*_", "", colnames(mat_1)[i])])
+  colnames(mat_2)[i] <- unique(all_sce$cell_type[all_sce$Tissue == sub("_[0-9]*$", "", colnames(mat_2)[i]) &
+                                 all_sce$Tissue_cluster == sub("^[A-Z2]*_", "", colnames(mat_2)[i])])
+}
+
+# Calculate euclidean distance on corrected counts
+dend_1 <- hclust(dist(t(mat_1), method = "euclidean"), method = "ward.D2")
+dend_2 <- hclust(dist(t(mat_2), method = "euclidean"), method = "ward.D2")
+dev.off()
+pdf("~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Supplementary_figures/S12/Tree_500HVG.pdf", width = 10, height = 10, useDingbats = FALSE)
+plot(as.phylo(dend_1), type = "fan", 
+     tip.color = metadata(all_sce)$colour_vector[sub("_[0-9]*$", "", unique(clusters))])
+dev.off()
+
+pdf("~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Supplementary_figures/S12/Tree_2000HVG.pdf", width = 10, height = 10, useDingbats = FALSE)
+plot(as.phylo(dend_2), type = "fan", 
+     tip.color = metadata(all_sce)$colour_vector[sub("_[0-9]*$", "", unique(clusters))])
+dev.off()
+```
+
+# Patient correction
+
+Next, I will only correct across the different patients.
+
+```{r}
+all_sce <- readRDS("~/Dropbox/Postdoc/2019-12-29_BE2020/All_corrected_sce_filtered.rds")
+all_sce <- all_sce[,all_sce$include]
+
+
+# Exclude duodenum cells
+all_sce <- all_sce[,colData(all_sce)$Tissue != "ND"]
+
+sce.list <- split.sce(sce = all_sce, groups = unique(all_sce$Patient), colData.name = "Patient")
+
+# Correctly normalize for each patient
+sce.list <- lapply(sce.list, function(n){
+  cur_cluster <- quickCluster(n, method = "igraph")#, irlba.args = c("work" = 100))
+  n <- computeSumFactors(n, clusters=cur_cluster)
+  n <- logNormCounts(n, log = TRUE)
+  n
+})
+
+# Order list by size
+sce.list <- sce.list[order(unlist(lapply(sce.list, ncol)), decreasing = TRUE)]
+# "Patient02" "Patient13" "Patient10" "Patient01" "Patient07" "Patient05" "Patient03" "Patient04" "Patient06" "Patient08" "Patient11" "Patient09"
+
+
+# Combine sce objects
+all_sce <- do.call("cbind", sce.list)
+
+# Perform batch correction
+corrected <- batch.correction(sce.list)
+set.seed(1234)
+tsne <- Rtsne(t(corrected), pca = FALSE, perxplexity = 100)
+
+
+
+p.tsne.patient.correction <- ggplot(data.frame(tSNE1 = tsne$Y[,1],
+                  tSNE2 = tsne$Y[,2],
+                  clusters = as.factor(colData(all_sce)$Tissue))) + 
+  geom_point(aes(tSNE1, tSNE2, colour = clusters)) +
+  scale_colour_manual(values = metadata(all_sce)$colour_vector)
+p.tsne.patient.correction
+
+
+# dendogram analysis
+clusters <- paste(colData(all_sce)$Tissue, colData(all_sce)$Tissue_cluster, sep = "_")
+mat <- matrix(data = NA, ncol = length(unique(clusters)), nrow = nrow(corrected))
+colnames(mat) <- unique(clusters)
+
+for(i in unique(clusters)){
+  mat[,i] <- rowMeans(corrected[,clusters == i])
+}
+
+# Rename the matrix to contain the actual cell-type labels
+for(i in 1:ncol(mat)){
+  colnames(mat)[i] <- unique(all_sce$cell_type[all_sce$Tissue == sub("_[0-9]*$", "", colnames(mat)[i]) &
+                                 all_sce$Tissue_cluster == sub("^[A-Z2]*_", "", colnames(mat)[i])])
+}
+
+# Calculate euclidean distance on corrected counts
+dend <- hclust(dist(t(mat), method = "euclidean"), method = "ward.D2")
+dev.off()
+pdf("~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Supplementary_figures/S12/Tree_patient_correction.pdf", width = 10, height = 10, useDingbats = FALSE)
+plot(as.phylo(dend), type = "fan", 
+     tip.color = metadata(all_sce)$colour_vector[sub("_[0-9]*$", "", unique(clusters))])
+dev.off()
+```
+
+
+# Sample correction wiht duodenum (as in fig 2)
+
+Next, I will correct across all samples with duodenum included
+
+```{r}
+sce <- readRDS("~/Dropbox/Postdoc/2019-12-29_BE2020/All_corrected_sce_filtered.rds")
+
+# Exclude contaminating cells
+sce <- sce[,sce$include]
+
+# Batch correction
+sce.list <- split.sce(sce, unique(sce$Sample), colData.name = "Sample")
+
+# Order sce objects for batch correction
+sce.list <- sce.list[order(unlist(lapply(sce.list, ncol)), decreasing = TRUE)]
+
+n <- names(sce.list)
+sce.list <- sce.list[c(which(grepl("NSCJ_out", n)), which(grepl("BSCJ_out", n)), 
+                       which(grepl("NE_out", n)), which(grepl("NG_out", n)),
+                       which(grepl("ND_out", n)),which(grepl("SMG_out", n)),
+                       which(grepl("BE_out", n)))]
+
+
+corrected <- batch.correction(sce.list)
+sce <- do.call("cbind", sce.list)
+
+# Compute new tSNE
+set.seed(11111)
+tsne <- Rtsne(t(corrected), pca = FALSE, perplexity = 250)
+reducedDims(sce)$TSNE <- tsne$Y
+
+# Clustering on corrected data
+g <- buildSNNGraph(corrected, k = 10)
+clusters <- igraph::cluster_louvain(g)$membership
+
+# Check what clusters overlap with nonepithelial cell types
+tmp<-reshape2::dcast(plyr::count(cbind(clusters,sce$tissue_type)), formula = x.clusters ~ x.V2, fill = 0)
+tmp<-tmp$x.clusters[tmp$NonEpithelial == apply(as.matrix(tmp[,2:5]), 1, max)]
+# View(tmp)
+# Exclude immune and stromal clusters
+ImmuneTF <- clusters
+
+
+#Check what cluster overlap with immune and stromal cells in the individual tissues
+table(paste(ImmuneTF,colData(sce)$tissue_type, sep = "_"))
+ggplot(data.frame(cluster = factor(clusters),
+                  Cells = colData(sce)$tissue_type)) +
+  geom_bar(aes(fill = Cells, x = cluster), position = "fill", stat = "count")
+#10, 13, 19:22, 24
+ImmuneTF <- ifelse(ImmuneTF %in% tmp, "nonepi", "epi")
+
+
+# Visualize clustering with low alpha for immune and stromal cells
+ggplot(data.frame(tSNE1 = tsne$Y[,1],
+                  tSNE2 = tsne$Y[,2],
+                  clusters = as.factor(clusters),
+                  ImmuneTF =ImmuneTF)) + 
+  geom_point(aes(tSNE1, tSNE2, colour = clusters, alpha = ImmuneTF), size = 0.5) +
+  scale_alpha_manual(values = c("epi" = 1 , "nonepi" = 0.05)) 
+
+# Visualize tsne
+p.all.cells <- ggplot(data.frame(tsne1 = reducedDims(sce)$TSNE[,1],
+                                 tsne2 = reducedDims(sce)$TSNE[,2],
+                                 tissue = colData(sce)$Tissue,
+                                 ImmuneTF =ImmuneTF)) + 
+  geom_point(aes(tsne1, tsne2, alpha = ImmuneTF), colour = "black", size = 1) + 
+  geom_point(aes(tsne1, tsne2, colour = tissue, alpha = ImmuneTF), size = 0.5) + 
+  scale_color_manual(values = metadata(sce)$colour_vector) + 
+  scale_alpha_manual(values = c("epi" = 1 , "nonepi" = 0.05)) +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        axis.line = element_line(colour = "grey"))
+p.all.cells
+ggsave("~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Supplementary_figures/S12/All_cells_tsne.pdf", p.all.cells, width = 7, height = 5, useDingbats = FALSE)
+
+#Identify the immune and stromal cells based on the manual annotation
+ImmuneTF <- colData(sce)$cell_type
+ImmuneTF[!(ImmuneTF %in% c("Immune", "Stromal"))] <- "epi"
+
+# Visualize tsne
+ggplot(data.frame(tsne1 = reducedDims(sce)$TSNE[,1],
+                                 tsne2 = reducedDims(sce)$TSNE[,2],
+                                 tissue = colData(sce)$Tissue,
+                                 ImmuneTF =ImmuneTF)) + 
+  geom_point(aes(tsne1, tsne2, alpha = ImmuneTF), colour = "black", size = 1) + 
+  geom_point(aes(tsne1, tsne2, colour = tissue, alpha = ImmuneTF), size = 0.5) + 
+  scale_color_manual(values = metadata(sce)$colour_vector) + 
+  scale_alpha_manual(values = c("epi" = 1 , "Immune" = 0.05, "Stromal" = 0.05)) +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        axis.line = element_line(colour = "grey"))
+
+
+
+
+
+
+clusters <- paste(colData(sce)$Tissue, colData(sce)$Tissue_cluster, sep = "_")
+mat <- matrix(data = NA, ncol = length(unique(clusters)), nrow = nrow(corrected))
+colnames(mat) <- unique(clusters)
+
+for(i in unique(clusters)){
+  mat[,i] <- rowMeans(corrected[,clusters == i])
+}
+
+# Rename the matrix to contain the actual cell-type labels
+for(i in 1:ncol(mat)){
+  colnames(mat)[i] <- unique(sce$cell_type[sce$Tissue == sub("_[0-9]*$", "", colnames(mat)[i]) &
+                                             sce$Tissue_cluster == sub("^[A-Z2]*_", "", colnames(mat)[i])])
+}
+
+# Calculate euclidean distance on corrected counts
+dend <- hclust(dist(t(mat), method = "euclidean"), method = "ward.D2")
+plot(as.phylo(dend), type = "fan", 
+     tip.color = metadata(sce)$colour_vector[sub("_[0-9]*$", "", unique(clusters))])
+
+dev.off()
+pdf("/home/karolno/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Supplementary_figures/S12/Tree_corrected_counts_withND.pdf", width = 10, height = 10, useDingbats = FALSE)
+plot(as.phylo(dend), type = "fan", 
+     tip.color = metadata(sce)$colour_vector[sub("_[0-9]*$", "", unique(clusters))])
+dev.off()
+
+```
+
+# End Matter
+
+To finish get session info:
+
+```{r Endnote, include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE}
+sessionInfo()
+```

@@ -1,0 +1,500 @@
+---
+title: "Comparison of Normal samples, EAC and ESCA RNA-seq with BE scRNA-seq - MuSiC Results"
+author: "Karol"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float:
+      toc_collapsed: true
+    toc_depth: 3
+    number_sections: false
+    theme: paper
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+# Introduction
+
+Here I am using MuSiC for deconvolution of data. Unlike Cibersort, this method does not require selection of marker genes (https://doi.org/10.1038/s41467-018-08023-x). I am using samples from Fitzgerald lab (BE, NE, NG and EAC) and from the oesophageal TCGA project (TCGA-ESCA) that has a mixture of adonomarcinomas and squamous cancers.
+
+
+```{r setup, include=FALSE}
+# export RSTUDIO_PANDOC=/usr/lib/rstudio-server/bin/pando
+# Rscript -e "library(rmarkdown); render('Figure_5A.Rmd')"
+knitr::opts_chunk$set(	echo=TRUE,
+                       results='asis',
+                       fig.align='center')
+```
+
+```{r setup, , echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE}
+#Environment setup
+library(scran)
+library(MuSiC)
+library(pheatmap)
+library(Matrix)
+library(xbioc)
+library(RColorBrewer)
+library(reshape2)
+library(Rtsne)
+source("../Analysis/Functions/auxiliary.R")
+
+# input data
+files.dir<-"~/Dropbox/Postdoc/2019-12-29_BE2020/RNA-seq/"
+
+#output data location
+files.out<-"~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/"
+
+#image annotation
+anno_col<-list(
+  Project.ID = c("Gastric" = "#4DBBD5FF", "Squamous" = "darkred", "Barrett's" = "#00A087FF", "ICGC-ESAD" = "#FF0DFFFF", "TCGA-ESCA" = "#15FF0DFF"),
+  Tissue = c("NG" = "#4DBBD5FF","NE" = "darkred","BE" = "#00A087FF", "ND" = "#3C5488FF","SMG" = "#B09C85FF", "ALL" = "grey80")
+  )
+    
+
+```
+
+## Process single cell RNA-seq data.
+
+```{r process_scRNA, include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 10}
+#read all data
+sce <- readRDS("~/Dropbox/Postdoc/2019-12-29_BE2020/All_corrected_sce_filtered.rds")
+
+# Exclude contaminating cells
+sce <- sce[,sce$include]
+
+
+#keep only cells from pure tissue types
+cur.sce<-sce[,colData(sce)$Tissue %in% c("NG","NE","BE", "SMG")]
+
+#replace "_" with "-" in names of cell types
+cur.sce$cell_type<-gsub("_","-",cur.sce$cell_type)
+#replace "_" with "-" in names of cell types
+cur.sce$cell_type_secondary<-gsub("_","-",cur.sce$cell_type_secondary)
+
+#keep only samples with 300 cells per tissue
+cur.sce$Patient_tissue<-paste(cur.sce$Patient, cur.sce$Tissue,sep = "_")
+cell.counts<-table(paste(cur.sce$Patient, cur.sce$Tissue,sep = "_"))
+cur.sce <- cur.sce[,cur.sce$Patient_tissue %in% names(cell.counts[cell.counts>300])]
+
+
+# I will also remove Myoepithelial cells (very small number of cells from a single patient)
+cur.sce<-cur.sce[,!(cur.sce$cell_type %in% c("Myo-epithelial"))]
+
+
+# Identify overlapping cells and assign the same type of immune and stromal cells to the same clusters of cells across tissues
+# Batch correction
+sce.list <- split.sce(cur.sce, unique(cur.sce$Sample), colData.name = "Sample")
+
+# Order sce objects for batch correction
+sce.list <- sce.list[order(unlist(lapply(sce.list, ncol)), decreasing = TRUE)]
+
+n <- names(sce.list)
+sce.list <- sce.list[c(which(grepl("NE_out", n)), which(grepl("NG_out", n)),
+                       which(grepl("BE_out", n)), which(grepl("SMG_out", n)))]
+
+corrected <- batch.correction(sce.list)
+cur.sce <- do.call("cbind", sce.list)
+
+# Compute new tSNE
+set.seed(1234)
+tsne <- Rtsne(t(corrected), pca = FALSE, perplexity = 250)
+reducedDims(cur.sce)$TSNE <- tsne$Y
+
+# Clustering on corrected data
+g <- buildSNNGraph(corrected, k = 10)
+clusters <- igraph::cluster_louvain(g)$membership
+
+# Check what clusters overlap with nonepithelial cell types
+tmp<-reshape2::dcast(plyr::count(cbind(clusters,cur.sce$tissue_type)), formula = x.clusters ~ x.V2, fill = 0)
+tmp<-tmp$x.clusters[tmp$NonEpithelial == apply(as.matrix(tmp[,2:5]), 1, max)]
+
+# Identify the type epithelial cells
+tmp2<-reshape2::dcast(plyr::count(cbind(clusters[clusters %in% tmp],cur.sce$cell_type_secondary[clusters %in% tmp])), formula = x.1 ~ x.2, fill = 0)
+tmp3<-colnames(tmp2)[apply(tmp2,1,which.max)]
+names(tmp3)<-tmp2$x.1
+
+# replace the names of the non-epithelial cells if they don't match the type across tissues
+for (i in names(tmp3)) {
+  cur.sce$cell_type_secondary[clusters == i]<-tmp3[i]
+}
+
+#replace tissue names for a generic names for immune and stromal cells
+cur.sce$Tissue[cur.sce$cell_type %in% c("Immune", "Stromal")]<-"ALL"
+
+
+# Visualize tsne
+metadata(cur.sce)$colour_vector["ALL"]<-"black"
+
+p.all.cells <- ggplot(data.frame(tsne1 = reducedDims(cur.sce)$TSNE[,1],
+                                 tsne2 = reducedDims(cur.sce)$TSNE[,2],
+                                 tissue = colData(cur.sce)$Tissue
+                                 )) + 
+  geom_point(aes(tsne1, tsne2), colour = "black", size = 1) + 
+  geom_point(aes(tsne1, tsne2, colour = tissue), size = 0.5) + 
+  scale_color_manual(values = metadata(cur.sce)$colour_vector) + 
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        axis.line = element_line(colour = "grey"))
+p.all.cells
+
+# Visualize tsne cell type
+p.all.cells <- ggplot(data.frame(tsne1 = reducedDims(cur.sce)$TSNE[,1],
+                                 tsne2 = reducedDims(cur.sce)$TSNE[,2],
+                                 cell.type = colData(cur.sce)$cell_type_secondary
+                                 )) + 
+  geom_point(aes(tsne1, tsne2), colour = "black", size = 1) + 
+  geom_point(aes(tsne1, tsne2, colour = cell.type), size = 0.5) + 
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        axis.line = element_line(colour = "grey"))
+p.all.cells
+
+
+#tracking names
+cur.sce$cell.types<-(paste0(cur.sce$Tissue,"_",cur.sce$cell_type_secondary))
+cur.sce$cell.groups<-(paste0(cur.sce$Tissue,"_",cur.sce$cell_type_secondary,"_",cur.sce$Patient))
+
+#create phenotype matrix
+pheno.matrix<-colData(cur.sce)[,c(3,4,16,17,18,19,23,24)]
+
+#annotate phenotypes
+metadata <- data.frame(labelDescription= c("Patient ID", "Tissue ID", "Tissue cluster", "Cell Type", "Cell Type Detail", "Tissue Type", "Cell Type 2", "Cell Group"), row.names=colnames(pheno.matrix))
+
+#create Expression set for the input into MuSiC
+cur.sce1<-ExpressionSet(assayData = as.matrix(counts(cur.sce)), phenoData = new("AnnotatedDataFrame", data = as.data.frame(pheno.matrix), varMetadata = metadata) )
+```
+
+## Prepare data from bulk RNA-seq
+
+### EAC data 
+
+```{r process_bulk, include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 10}
+#EAC and normal data (linear scale). Contains only normal samples that were used in figure 4
+bulk.data<-readRDS(paste0(files.dir,"/EAC-all/count_codingGenes_clean.rds"))
+#replace gene ID into Ensembl ID
+IDs<-rowData(sce)[rowData(sce)$Symbol %in% rownames(bulk.data), 1:2]
+bulk.data<-bulk.data[IDs$Symbol,]
+rownames(bulk.data)<-IDs$ID
+```
+
+### EAC data samples annotation
+
+```{r}
+#get information about the samples from EAC
+rowID_EAC<-readRDS(paste0(files.dir,"//EAC-all/samplesAnnotation_clean.rds"))
+
+```
+
+
+
+### ESCA data 
+
+```{r , include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 10}
+#get location of genes counts (to make it compatible with data used for MuSiC I will get the same list of samples)
+location<-paste0(files.dir,"/TCGA/")
+anno<-read.delim(paste0(location, "gdc_sample_sheet.2019-04-16_FPKM.tsv")) #It has FPKM in the name but the annotation of patients is the same for both raw and FPKM data
+#keep only cancer data for ESCA project
+anno.all<-anno[anno$Project.ID == "TCGA-ESCA" & anno$Sample.Type == "Primary Tumor",]
+
+#get location of genes counts (linear data)
+anno<-read.delim(paste0(location, "gdc_sample_sheet.2019-04-16.tsv"))
+anno.all<-anno[anno$Sample.ID %in% anno.all$Sample.ID,]
+
+#get data for cancers
+data.all<-as.data.frame(matrix(ncol = nrow(anno.all), nrow = nrow(read.table(gzfile(paste0(location,"/Data_counts/", anno.all[1,1], "/", anno.all[1,2])), row.names = 1))))
+rownames(data.all)<-rownames(read.table(gzfile(paste0(location,"/Data_counts/", anno.all[1,1], "/", anno.all[1,2])), row.names = 1))
+colnames(data.all)<-anno.all$Sample.ID
+
+#Read all data
+for (i in colnames(data.all)) {
+  
+  tmp <-read.table(gzfile(paste0(location,"/Data_counts/", anno.all[anno.all$Sample.ID == i,1], "/", anno.all[anno.all$Sample.ID == i,2])), row.names = 1)
+  data.all[,i]<-tmp[rownames(data.all),1]
+  
+}
+
+rownames(data.all)<-sapply(rownames(data.all), function(x) unlist(strsplit(x, split = "[.]"))[1])
+
+#merge Cambridge and TCGA data
+bulk.data<-merge(bulk.data, data.all, by = 0)
+
+colnames(bulk.data)[1]<-"Gene"
+
+rownames(bulk.data)<-bulk.data[,1]
+bulk.data<-bulk.data[,colnames(bulk.data) != "Gene"]
+```
+
+
+### STAD and ESCA data annodatation
+
+```{r}
+#keep only data for sample group and clinical info about Barrett's next to cancer
+rowID<-rowID_EAC[,c(6,1)]
+colnames(rowID)[1]<-"Project.ID" 
+#create new column for normal and cancer samples
+# Project.ID has information about the proejct in line of TCGA project ID
+rowID$Project.ID[rowID$Project.ID == "EAC"]<- "ICGC-ESAD"
+rowID$Project.ID[rowID$Project.ID == "Barretts"]<- "Barrett's"
+
+rowID$Sample.Type<-ifelse(rowID$Project.ID == "ICGC-ESAD", "Primary Tumor", "Solid Tissue Normal")
+
+#Create primary diagnosis column
+rowID$primary_diagnosis[rowID$Project.ID == "ICGC-ESAD"]<-"Adenocarcinoma"
+rowID$primary_diagnosis[rowID$Project.ID != "ICGC-ESAD"]<-rowID$Project.ID[rowID$Project.ID != "ICGC-ESAD"]
+rowID$site_of_resection_or_biopsy<-"ND"
+rowID$Case.ID<-row.names(rowID)
+rowID$Sample.ID<-rowID$Case.ID
+
+#get information about TCGA patients
+rowID.data<-read.table(paste0(location,"//clinical.tsv"), header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+
+#get information about TCGA samples
+rowID.data2<-read.delim(paste0("/home/karolno/Dropbox/Postdoc/2019-04-15_Cancer-BE/TCGA/", "gdc_sample_sheet.2019-04-16.tsv"), stringsAsFactors = FALSE)
+
+#merge
+samples<-rowID.data2[rowID.data2$Sample.ID %in% colnames(data.all), 5:8 ]
+patients<-rowID.data[rowID.data$submitter_id %in% rowID.data2$Case.ID[rowID.data2$Sample.ID %in% samples$Sample.ID], c(2,11, 24)]
+
+#combine types of cancer for simplicity
+patients[grep("quamous", patients$primary_diagnosis),2]<-"Squamous Carcinoma"
+patients[grep("denocar", patients$primary_diagnosis),2]<-"Adenocarcinoma"
+
+#merge all data into a single dataframe
+rowID_all<-merge(samples, patients, all.x = TRUE, by.x = "Case.ID", by.y = "submitter_id")
+rownames(rowID_all)<-rowID_all$Sample.ID
+rowID_all$RP.BarrettsAdjacent<-"unknown"
+
+# Combine Cambridge and TCGA data
+rowID_combined<-rbind(rowID, rowID_all)
+#remove normal samples with Duodenum data
+rowID_combined<-rowID_combined[rowID_combined$Project.ID != "Duodenum", ]
+
+
+
+
+rowID_print<-rowID_combined[,c(1,2,3,4)]
+
+metadata2<-data.frame(labelDescription= c( "Study ID", "Barrett's Status", "Sample Type", "Diagnosis", "Site of resection", "Patient ID", "Sample ID"), row.names=colnames(rowID_combined))
+
+
+#create expression set
+data.all1<-ExpressionSet(assayData = as.matrix(bulk.data[,rownames(rowID_combined)]), phenoData = new("AnnotatedDataFrame", data = rowID_combined, varMetadata = metadata2) )
+
+```
+
+
+## Run MuSiC
+
+
+```{r music , include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 10}
+#read music scripts
+cell.prop<-music_prop(bulk.eset = data.all1, sc.eset = cur.sce1, clusters = "cell.types", samples = "Patient", select.ct = unique(cur.sce1$cell.types))
+# saveRDS(cell.prop, file  = paste0(files.dir,"/EAC-all/cell-prop.rds"))
+plot.data<-data.matrix(cell.prop$Est.prop.weighted)
+
+# all cells
+order.names<-c("NE_Basal","NE_Suprabasal","NE_Suprabasal-Dividing", "NE_Intermediate", "NE_Superficial",
+               "NG_Undifferentiated", "NG_Undifferentiated-Dividing", "NG_Foveolar-Intermediate", "NG_Foveolar-differentiated", "NG_Chief", "NG_Parietal", "NG_Endocrine-GHRL", "NG_Endocrine-CHGA", "NG_Endocrine-NEUROD1",
+               "BE_Columnar-Undifferentiated", "BE_Columnar-Undifferentiated-Dividing", "BE_Endocrine-NEUROG3", "BE_Columnar-Intermediate", "BE_Columnar-differentiated", "BE_Goblet",
+               "SMG_Duct-Intercalating", "SMG_Oncocytes-MUC5B-Low", "SMG_Mucous-MUC5B-High",
+               "ALL_Immune-T-cells", "ALL_Immune-B-cells", "ALL_Immune-Macrophages",
+               "ALL_Stromal-CALD1-cells", "ALL_Stromal-ADH1B-cells", "ALL_Stromal-GNG11-cells" 
+)
+plot.data<-plot.data[,order.names]
+
+#get information about the cell types
+colID<-sapply(colnames(plot.data), strsplit, "_")
+colID<-data.frame(matrix(unlist(colID), nrow=length(colID), byrow=T))
+rownames(colID)<-colnames(plot.data)
+colnames(colID)<-c("Tissue", "Cell Type")
+```
+
+
+
+## Relative Results - Normal
+
+### All cell types, all normal tissues
+
+This image contains a relative score for each cluster fo cell types from each the tissue type. The rows are patients.
+
+```{r, include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 15}
+#make a copy of data
+plot.data_copy<-plot.data
+
+plot.data<-plot.data[rownames(rowID_print)[rowID_print$Sample.Type == "Solid Tissue Normal"],]
+
+plot.data<-plot.data[rownames(rowID_print)[c(which(rowID_print$Project.ID == "Squamous"), which(rowID_print$Project.ID == "Gastric"), which(rowID_print$Project.ID == "Barrett's"))],]
+
+breaksList5=seq(0, 1, by = 0.025)
+
+pheatmap(plot.data, annotation_row = rowID_print[,1, drop = FALSE], breaks = breaksList5,color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breaksList5)), main = "Relative score", cluster_cols = FALSE, show_rownames = FALSE, clustering_method = "ward.D2", cluster_rows = FALSE, annotation_colors = anno_col, annotation_col = colID[,1, drop = FALSE], labels_col = as.character(colID[colnames(plot.data), 2]))
+```
+
+```{r, include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 15}
+plotdata4<-as.data.frame(matrix(ncol = 6, nrow = nrow(plot.data)))
+colnames(plotdata4)<-c("Sample","NE","NG","BE","SMG","ALL")
+plotdata4$Sample<-rownames(plot.data)
+plotdata4$BE<-rowSums(plot.data[,colnames(plot.data) %in% rownames(colID)[colID$Tissue == "BE"]])
+plotdata4$NG<-rowSums(plot.data[,colnames(plot.data) %in% rownames(colID)[colID$Tissue == "NG"]])
+plotdata4$NE<-rowSums(plot.data[,colnames(plot.data) %in% rownames(colID)[colID$Tissue == "NE"]])
+plotdata4$SMG<-rowSums(plot.data[,colnames(plot.data) %in% rownames(colID)[colID$Tissue == "SMG"]])
+plotdata4$ALL<-rowSums(plot.data[,colnames(plot.data) %in% rownames(colID)[colID$Tissue == "ALL"]])
+
+
+plotdata4.2<-as.matrix(plotdata4[,2:6])
+rownames(plotdata4.2)<-plotdata4$Sample
+```
+
+### Collapsed tissues
+
+This image containes a relative score for each tissue (scores for clusters from each tissue were add) The rows are patients. THe most similar cell are BE cells.
+
+```{r, include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 15}
+pheatmap(plotdata4.2, annotation_row = rowID_print[,1, drop = FALSE], breaks = breaksList5,color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breaksList5)), main = "Relative score per tissue type", cluster_cols = FALSE, show_rownames = FALSE, clustering_method = "ward.D2",cluster_rows = FALSE, annotation_colors = anno_col)
+
+tmp<-c(names(sort(plotdata4.2[rownames(rowID_print)[which(rowID_print$Project.ID == "Squamous")],1], decreasing = TRUE)),names(sort(plotdata4.2[rownames(rowID_print)[which(rowID_print$Project.ID == "Gastric" )],2], decreasing = TRUE)),names(sort(plotdata4.2[rownames(rowID_print)[which(rowID_print$Project.ID == "Barrett's" )],3], decreasing = TRUE)))
+breaksList5=seq(0, 1, by = 0.01)
+pheatmap(plot.data[tmp,], annotation_row = rowID_print[,1, drop = FALSE], breaks = breaksList5,color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breaksList5)), main = "Relative score", cluster_cols = FALSE, show_rownames = FALSE, clustering_method = "ward.D2", cluster_rows = FALSE, annotation_colors = anno_col, annotation_col = colID[,1, drop = FALSE], labels_col = as.character(colID[colnames(plot.data), 2]), gaps_row = c(12, 23), file = paste0(files.out, "/Supplementary_figures/S19/Figure_S19A_all.pdf"))
+
+pheatmap(plotdata4.2[tmp,], annotation_row = rowID_print[,1, drop = FALSE], breaks = breaksList5,color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breaksList5)), main = "Relative score per tissue type", cluster_cols = FALSE, show_rownames = FALSE, clustering_method = "ward.D2",cluster_rows = FALSE, annotation_colors = anno_col, gaps_row = c(12, 23), file = paste0(files.out, "/Supplementary_figures/S19/Figure_S19B_all.pdf"))
+
+```
+## Relative Results - Cancers
+
+### Only ESAD data
+
+This image containes a relative score for each cluster fo cell types from each the tissue type. The rows are patients. THe most similar cell types are BE undifferentiated clusters.
+
+```{r, include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 15}
+
+plot.data<-plot.data_copy
+breaksList5=seq(0, 1, by = 0.01)
+
+plotdata4<-as.data.frame(matrix(ncol = 6, nrow = nrow(plot.data)))
+colnames(plotdata4)<-c("Sample","NE","NG","BE","SMG","ALL")
+plotdata4$Sample<-rownames(plot.data)
+plotdata4$BE<-rowSums(plot.data[,colnames(plot.data) %in% rownames(colID)[colID$Tissue == "BE"]])
+plotdata4$NG<-rowSums(plot.data[,colnames(plot.data) %in% rownames(colID)[colID$Tissue == "NG"]])
+plotdata4$NE<-rowSums(plot.data[,colnames(plot.data) %in% rownames(colID)[colID$Tissue == "NE"]])
+plotdata4$SMG<-rowSums(plot.data[,colnames(plot.data) %in% rownames(colID)[colID$Tissue == "SMG"]])
+plotdata4$ALL<-rowSums(plot.data[,colnames(plot.data) %in% rownames(colID)[colID$Tissue == "ALL"]])
+
+
+plotdata4.2<-as.matrix(plotdata4[,2:6])
+rownames(plotdata4.2)<-plotdata4$Sample
+
+tmp<-c(names(sort(plotdata4.2[rownames(rowID_print)[which(rowID_print$Project.ID == "ICGC-ESAD" & rowID_print$primary_diagnosis == "Adenocarcinoma" )],3], decreasing = TRUE)))
+
+pheatmap(plot.data[tmp,], annotation_row = rowID_EAC[,c(1,3,4,6), drop = FALSE], breaks = breaksList5,color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breaksList5)), main = "Relative score", cluster_cols = FALSE, show_rownames = FALSE, clustering_method = "ward.D2", cluster_rows = TRUE)
+
+
+```
+
+### Collapsed tissues
+
+This image containes a relative score for each tissue (scores for clusters from each tissue were add) The rows are patients. THe most similar cell are BE cells.
+
+```{r, include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 15}
+pheatmap(plotdata4.2[tmp,], annotation_row = rowID_EAC[,c(1,2,4,6), drop = FALSE], breaks = breaksList5,color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breaksList5)), main = "Relative score per tissue type", cluster_cols = FALSE, show_rownames = FALSE, clustering_method = "ward.D2",cluster_rows = TRUE)
+```
+### Plot data with clinical grouping
+
+The following images contain plots of differences between contribution of different cell types to different clinical clasification.
+
+```{r, include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 15}
+# Prepare data all cell types
+ggdata0<-melt(cbind(plot.data[tmp,], rowID_EAC[tmp,c(1,2,3,4,5,6,7), drop = FALSE], rownames(plotdata4.2[tmp,])),measure.vars = 1:22, variable.name = "Tissue")
+
+#prepare data for combined tissues
+ggdata<-melt(cbind(plotdata4.2[tmp,], rowID_EAC[tmp,c(1,2,3,4,5,6,7), drop = FALSE], rownames(plotdata4.2[tmp,])),measure.vars = c("NE", "NG", "BE", "SMG", "ALL"), variable.name = "Tissue")
+
+p<-ggplot(ggdata0, aes(x=Tissue, y=value, fill = RP.SiewertClassification)) +
+  geom_boxplot( position=position_dodge(1))+ theme(axis.text.x = element_text(angle = 45, hjust = 1),plot.title = element_text(hjust = 0.5)) + ggtitle("Siewert Type" )
+p 
+
+p<-ggplot(ggdata, aes(x=Tissue, y=value, fill = RP.SiewertClassification)) +
+  geom_boxplot( position=position_dodge(1))+ theme(axis.text.x = element_text(angle = 45, hjust = 1),plot.title = element_text(hjust = 0.5)) + ggtitle("Siewert Type" )
+p 
+
+p<-ggplot(ggdata0, aes(x=Tissue, y=value, fill = RP.BarrettsAdjacent)) +
+  geom_boxplot( position=position_dodge(1))+ theme(axis.text.x = element_text(angle = 45, hjust = 1),plot.title = element_text(hjust = 0.5)) + ggtitle("Barrett's Adjacent" )
+p 
+
+p<-ggplot(ggdata, aes(x=Tissue, y=value, fill = RP.BarrettsAdjacent)) +
+  geom_boxplot( position=position_dodge(1))+ theme(axis.text.x = element_text(angle = 45, hjust = 1),plot.title = element_text(hjust = 0.5)) + ggtitle("Barrett's Adjacent" )
+p 
+
+p<-ggplot(ggdata0, aes(x=Tissue, y=value, fill = RP.TumourGradingDifferentiationStatus)) +
+  geom_boxplot( position=position_dodge(1))+ theme(axis.text.x = element_text(angle = 45, hjust = 1),plot.title = element_text(hjust = 0.5)) + ggtitle("Differentiation Status" )
+p 
+
+p<-ggplot(ggdata, aes(x=Tissue, y=value, fill = RP.TumourGradingDifferentiationStatus)) +
+  geom_boxplot( position=position_dodge(1))+ theme(axis.text.x = element_text(angle = 45, hjust = 1),plot.title = element_text(hjust = 0.5)) + ggtitle("Differentiation Status" )
+p 
+
+p<-ggplot(ggdata0, aes(x=Tissue, y=value, fill = RP.TStage.PrimaryTumour)) +
+  geom_boxplot( position=position_dodge(1))+ theme(axis.text.x = element_text(angle = 45, hjust = 1),plot.title = element_text(hjust = 0.5)) + ggtitle("T Stage" )
+p 
+
+
+#get anova statistcs
+anova(lm(value ~ Tissue + RP.BarrettsAdjacent+RP.Location + RP.SiewertClassification + RP.TumourGradingDifferentiationStatus + RP.TStage.PrimaryTumour, data = ggdata0))
+
+#get anova statistcs
+anova(lm(value ~ Tissue + RP.BarrettsAdjacent+RP.Location + RP.SiewertClassification + RP.TumourGradingDifferentiationStatus + RP.TStage.PrimaryTumour, data = ggdata))
+
+```
+
+### All cancers 
+
+This are the figures for the paper. I use all cancer and I sort them according to contribution of specific cell types (BE for Adenos and NE for Squamous)
+
+```{r, include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 15}
+#remove non epithelial data
+plotdata4.3<-plotdata4.2[,colnames(plotdata4.2) != "ALL"]
+#re-normalise
+plotdata4.4<-plotdata4.3/rowSums(plotdata4.3)
+
+tmp<-c(names(sort(plotdata4.4[rownames(rowID_print)[which(rowID_print$Project.ID == "TCGA-ESCA" & rowID_print$primary_diagnosis == "Squamous Carcinoma" )],1], decreasing = TRUE)),names(sort(plotdata4.4[rownames(rowID_print)[which(rowID_print$Project.ID == "TCGA-ESCA" & rowID_print$primary_diagnosis == "Adenocarcinoma" )],3], decreasing = TRUE)),names(sort(plotdata4.4[rownames(rowID_print)[which(rowID_print$Project.ID == "ICGC-ESAD" & rowID_print$primary_diagnosis == "Adenocarcinoma" )],3], decreasing = TRUE)))
+
+pheatmap(plotdata4.2[tmp,], annotation_row = rowID_print[,c(1,4), drop = FALSE], breaks = breaksList5,color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breaksList5)), main = "Relative score per tissue type", cluster_cols = FALSE, show_rownames = FALSE, clustering_method = "ward.D2",cluster_rows = FALSE)
+
+
+pheatmap(plotdata4.4[tmp,], annotation_row = rowID_print[,c(1,4), drop = FALSE], breaks = breaksList5,color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breaksList5)), main = "Relative score per tissue type", cluster_cols = FALSE, show_rownames = FALSE, clustering_method = "ward.D2",cluster_rows = FALSE)
+
+pheatmap(plot.data[tmp,], annotation_row = rowID_print[,c(1,4), drop = FALSE], breaks = breaksList5,color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breaksList5)), main = "Relative score per tissue type", cluster_cols = FALSE, show_rownames = FALSE, clustering_method = "ward.D2",cluster_rows = FALSE, annotation_colors = anno_col)
+
+plot.data4.4<-plot.data[tmp,1:23]
+plot.data4.4<-plot.data4.4/rowSums(plot.data4.4)
+
+pheatmap(plotdata4.4[tmp,], annotation_row = rowID_print[,c(1,4), drop = FALSE], breaks = breaksList5,color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breaksList5)), main = "Relative score per tissue type", cluster_cols = FALSE, show_rownames = FALSE, clustering_method = "ward.D2",cluster_rows = FALSE, annotation_colors = anno_col)
+
+pheatmap(plot.data4.4, annotation_row = rowID_print[,c(1,4), drop = FALSE], breaks = breaksList5,color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breaksList5)), main = "Relative score, figure 5A", cluster_cols = FALSE, show_rownames = FALSE, clustering_method = "ward.D2", cluster_rows = FALSE, annotation_colors = anno_col, annotation_col = colID[,1, drop = FALSE], labels_col = as.character(colID[colnames(plot.data4.4), 2])[1:23], gaps_row = c(81,161))
+
+pheatmap(plotdata4.4[tmp,], annotation_row = rowID_print[,c(1,4), drop = FALSE], breaks = breaksList5,color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breaksList5)), main = "Relative score per tissue type, figure 4B", cluster_cols = FALSE, show_rownames = FALSE, clustering_method = "ward.D2",cluster_rows = FALSE, annotation_colors = anno_col, gaps_row = c(81,161))
+
+pheatmap(plot.data4.4, annotation_row = rowID_print[,c(1,4), drop = FALSE], breaks = breaksList5,color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breaksList5)), main = "Relative score, figure 5A", cluster_cols = FALSE, show_rownames = FALSE, clustering_method = "ward.D2", cluster_rows = FALSE, annotation_colors = anno_col, annotation_col = colID[,1, drop = FALSE], labels_col = as.character(colID[colnames(plot.data4.4), 2])[1:23], gaps_row = c(81,161), file = paste0(files.out, "/Figure_5//Figure_5A.pdf"),  width = 15)
+
+
+pheatmap(plotdata4.4[tmp,], annotation_row = rowID_print[,c(1,4), drop = FALSE], breaks = breaksList5,color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breaksList5)), main = "Relative score per tissue type, figure 5B", cluster_cols = FALSE, show_rownames = FALSE, clustering_method = "ward.D2",cluster_rows = FALSE, annotation_colors = anno_col, gaps_row = c(81,161), file = paste0(files.out, "/Figure_5//Figure_5B.pdf")) 
+```
+
+5
+## End Matters
+
+
+To finish get session info:
+
+```{r Endnote, echo=FALSE}
+sessionInfo()
+```
+
+
+
+
+
+

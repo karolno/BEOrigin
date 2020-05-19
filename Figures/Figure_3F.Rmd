@@ -1,0 +1,814 @@
+---
+title: "All samples with WGS"
+author: "Karol"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float:
+      toc_collapsed: true
+    toc_depth: 3
+    number_sections: false
+    theme: paper
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+
+##Introduction
+
+This is a pairwise comparison between the samples.
+
+Only variant with at least 3% AF and 100x coverage at the given location (must be in all samples from each patient) will be kept. 
+
+For any position that is not fulfiling the above criteria the position is dropped.
+
+Finally, I remove troublesome MT position:
+
+295, 2617, 13710 - reported as mutated in RNA-seq
+
+3107 - This position is next to an deletion and RNA-seq and WGS do not work well together.
+302 - 317 - This is the variable region of d-loop. When I manually check it there are lot of mutations in a stretch (C)7T(C)5 and they affect alignment of T nucleotide in a stretch https://www.nature.com/articles/cr200969
+
+
+```{r setup, include=FALSE}
+# export RSTUDIO_PANDOC=/usr/lib/rstudio-server/bin/pando
+# Rscript -e "library(rmarkdown); render('Figure_3F.Rmd')"
+knitr::opts_chunk$set(	echo=TRUE,
+                       results='asis',
+                       fig.align='center')
+```
+
+## Setup
+
+### Nucleotide frequency
+
+The following code can be run in bash to collect the frequencies of nucleotides. Requires samtools (http://www.htslib.org/) and pysamstats (https://github.com/alimanfoo/pysamstats). Here I used samtools 1.9 and pysamstats 1.1.2 (pysam 0.15.2)
+
+```{bash getcounts, include=TRUE, echo=TRUE, warning=FALSE, eval=FALSE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 10}
+### FOR RNA-seq samples
+for i in 0062 0231 0412 0553 0832 0848 0931 1075 1218 1281 1533 1546 1566 1661 1790;
+
+do
+for ii in BE GC NE D2 ;
+do
+echo $i
+echo $ii
+#   samtools index ../AHM_$i"_"$ii"_Aligned_MT.bam"
+############ RNA-seq data only have 3 qualities or read aligment based on the number of regions the read was mapped to. Keep only reads that map to a single location (-min-mapq=200)
+############ The quality of based was variable and I only keep the best nucleotides with base quality above 34
+pysamstats --type variation --min-mapq=200 --min-baseq=34 -f ../../Files/hg37/Homo_sapiens.GRCh37.dna.chromosome.MT.fa ../../BAM/RNA-seq/AHM_$i"_"$ii"_Aligned_MT.bam" >./AHM_$i"_"$ii"_Aligned_MT_q.counts"
+done
+done
+
+### FOR WGS samples
+for i in LP6008264-DNA_B06 LP6008264-DNA_F06 LP6008268-DNA_B04 LP6008269-DNA_H03 LP6008280-DNA_C06 LP6008280-DNA_G06 LP6008337-DNA_C04 LP6008337-DNA_G03 LP6008337-DNA_G04 LP6008338-DNA_C04 LP6008338-DNA_G03 LP6008338-DNA_G04;
+
+do
+echo $i
+#  samtools index ./$i".chrM.bam"
+
+############ WGS data only have continum of qualities. Keep only reads that mapped fairly well (-min-mapq=34)
+############ The quality of based was variable and I only keep the best nucleotides with base quality above 34
+pysamstats --type variation --min-mapq=34 --min-baseq=34 -f ../../Files/hg19/chrM.fa ../../BAM/WGS/$i".chrM.bam" >./$i"_MT_q.counts"
+done
+
+
+```
+
+### Functions
+
+```{r setup, , echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE}
+library("pheatmap")
+library("tidyr")
+library("reshape2")
+library("ggplot2")
+library("gridExtra")
+library("RColorBrewer")
+library("knitr")
+library("corrplot")
+library("ggpubr")
+
+#function for calculation of mitodistance between samples
+mitodist<- function (x,y,z = 100,vaf = 0.03, count = 0, positions = NA) {
+  
+  #z - coverage
+  #vaf - minimum VAF
+  #count - combined count in two samples for given VAF
+  
+  #merge locations as they do not always overlap
+  tmp<-merge(x,y, by = c("chrom","pos"), all = TRUE, sort = TRUE)
+  tmp<-tmp[!(tmp$pos %in% positions),]
+  #replace the NA with 0 at the counts table 
+  tmp[,c(4,7:10,12,15:18)][is.na(tmp[,c(4,7:10,12,15:18)])]<-0
+  
+  #make matrix of frequencies
+  x2<-as.matrix(tmp[,7:10]/rowSums(as.matrix(tmp[,7:10])))
+  x2[is.na(x2)]<-0
+  y2<-as.matrix(tmp[,15:18]/rowSums(as.matrix(tmp[,15:18])))
+  y2[is.na(y2)]<-0
+  #change counts to 0 if they are below indicated vaf in both samples (1 sample above given vaf is required to keep the allel)
+  tmp[,7:10][x2<vaf & y2<vaf] <- 0
+  tmp[,15:18][x2<vaf & y2<vaf] <- 0
+  
+  #change counts to 0 if they are below required coverage for the given alelle (default is minimum of 5 reads per pair/sum of samples)
+  tmp[,7:10][(tmp[,7:10]+tmp[,15:18])<count] <- 0
+  tmp[,15:18][(tmp[,7:10]+tmp[,15:18])<count] <- 0
+  
+  #recalculate the frequencies
+  x2<-as.matrix(tmp[,7:10]/rowSums(as.matrix(tmp[,7:10])))
+  x2[is.na(x2)]<-0
+  y2<-as.matrix(tmp[,15:18]/rowSums(as.matrix(tmp[,15:18])))
+  y2[is.na(y2)]<-0
+  
+  #get the indicator tables. This table check the coverage at each position. It has to be larger than indicated coverage (default is 100)
+  x1<-as.matrix(ifelse(rowSums(as.matrix(tmp[,7:10]))>z,1,0))
+  y1<-as.matrix(ifelse(rowSums(as.matrix(tmp[,15:18]))>z,1,0))
+  
+  
+  #calculate square root of absolute AF difference
+  AF_dist<-sqrt(abs(x2-y2))
+  
+  #calculate distance
+  dist<-(sum(AF_dist * as.vector(x1*y1)))/sum(x1*y1)
+  
+  return(dist)
+}
+
+
+
+```
+
+## Perform comparison analysis
+
+I increased the treshold for good quality nucleotides. For some reason, the quality of nucletides coming from our analysis if not continous. I only keep nucleotides with phred>34. See the run.txt script in data.path/Counts2 to see how it was calculated. 
+
+### Read in data
+
+I only read in data for samples that were not excluded in figure 3E.
+
+```{r readin, include=TRUE, echo=TRUE, results='markup', warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 10}
+# Set Conditions
+z=100
+vaf=0.03
+
+#Names of samples:
+samples<-c("0062","0231","0412","0832","0848","0931","0553","1075","1218","1281","1533","1566","1661","1790")  # RNA-seq data only for samples that have WGS
+
+samples<-samples[!(samples %in% c("0412","1218"))] #RNA-seq data
+
+conditions<-c("BE","GC","D2","NE") # RNA-seq data
+
+condition.map<-c("NE" = "NE",
+                 "BE" = "BE",
+                 "GC" = "NG",
+                 "D2" = "ND"
+)
+
+
+samples.WGS<-c("0062", "0931","0848", "0832", "1218", "0231") #WGS data
+samples.WGS<-samples.WGS[!(samples.WGS %in% c("0412","1218"))] #RNA-seq data
+
+conditions.WGS<-c("BE","D2") #WGS data
+
+#data location
+
+data.path<-"~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Figure_3/"
+
+#Annotation of WGS data
+mapping<-read.delim(file = paste0(data.path,"/Figure_3F/sample_anno_2"), stringsAsFactors = FALSE, header = FALSE)
+
+#positions to be removed
+positions<-c(302:317, 295, 2617, 3107, 13710)
+
+
+
+#create list for all the data
+all.data<-list()
+
+#Read data
+for (sample in samples) { #all RNA-seq samples
+  for (condition in conditions) { #all conditions for RNA-seq
+    all.data[[paste0(sample,"_",condition.map[condition],"_RNA")]]<-read.delim(file = paste0(data.path,"/Figure_3E/Counts2/RNA-seq/AHM_",sample,"_",condition,"_Aligned_MT_q.counts"), stringsAsFactors = FALSE)[,c(1:4,6,8,14,16,18,20)] #keeps information about the count of mutatations
+  }
+  if (sample %in% samples.WGS){ # all WGS data
+    for (condition in conditions.WGS) {
+      # condition<-conditions.cancer[1]
+      tmp<-mapping[mapping[,1] == paste0(sample, "_", condition),2]
+      all.data[[paste0(sample,"_",condition.map[condition],"_WGS")]]<-read.delim(file = paste0(data.path,"/Figure_3E/Counts2/WGS/",tmp,"_MT_q.counts"), stringsAsFactors = FALSE)[,c(1:4,6,8,14,16,18,20)]
+      all.data[[paste0(sample,"_",condition.map[condition],"_WGS")]][,1]<-"MT" # change the name of chromosome to ensembl
+    }
+  }
+}
+
+```
+
+### Pearson correlation per samples
+
+```{r pearson, include=TRUE, echo=TRUE, results='markup', warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 10}
+
+#create empty list containing all results
+all.results<-list()
+
+#create empty list containing all p.values for correlation
+all.results.p<-list()
+
+#create empty list containing all mutations
+mutations<-list()
+
+for (sample in samples) { #analyse data patient by patient
+  
+  #create an empty data frame to store all of the data
+  all.data2<-data.frame(chrom = "MT", pos = 1:17000, ref = "N")
+  all.data2$ref<-as.character(all.data2$ref)
+  all.data2<-all.data2[!(all.data2$pos %in% positions),]
+  
+  #create an empty data frame to store coverage data
+  all.cov<-data.frame(chrom = "MT", pos = 1:17000, ref = "N")
+  all.cov<-all.cov[!(all.cov$pos %in% positions),]
+  #empty matrix containing AF
+  all.AF<-matrix()
+  
+  #empty matrix containing test results for coverage
+  all.cov.test<-matrix()
+  
+  #empty matirx containg test results for AF
+  all.AF.test<-matrix()
+  
+  #types of samples
+  if(sample %in% samples.WGS) {
+    types<-c("NE_RNA","BE_RNA","NG_RNA","ND_RNA","BE_WGS","ND_WGS")
+  } else {
+    types<-c("NE_RNA","BE_RNA","NG_RNA","ND_RNA")
+    
+  }
+  
+  #collect teh data for the given patient
+  for (condition in types) {
+    
+    #create name to extract data from all samples
+    name<-paste0(sample,"_",condition)
+    
+    
+    tmp<-all.data[[name]]
+    
+    colnames(tmp)[c(4,7:10)]<-paste0(c("reads",colnames(tmp)[c(7:10)]), "_", name)
+    
+    #get the reference nucleotide
+    all.data2$ref[as.numeric(tmp$pos)]<-tmp$ref
+    
+    #merge data
+    all.data2<-merge(all.data2, tmp[,c(1:2,7:10)], by = 1:2, all.x = TRUE)
+    
+    #merge sample coverage data
+    all.cov<-merge(all.cov, tmp[,c(1,2,4,4,4,4)], by = 1:2, all.x = TRUE)
+  }
+  
+  #get allele fractions
+  all.AF<-all.data2[,4:ncol(all.data2)]/all.cov[,4:ncol(all.cov)]
+  
+  #get the dominant allele per sample
+  all.AF0.1<-all.AF
+  colnames(all.AF0.1)<-rep(c("A","C","T","G"), times = ncol(all.AF0.1)/4)
+  all.AF0.2<-matrix(ncol = 4, nrow = nrow(all.AF0.1))
+  colnames(all.AF0.2)<-c("A","C","T","G")
+  all.AF0.2[,1]<-apply(all.AF0.1[,colnames(all.AF0.1) == "A"], 1, median , na.rm = TRUE)
+  all.AF0.2[,2]<-apply(all.AF0.1[,colnames(all.AF0.1) == "C"], 1, median , na.rm = TRUE)
+  all.AF0.2[,3]<-apply(all.AF0.1[,colnames(all.AF0.1) == "T"], 1, median , na.rm = TRUE)
+  all.AF0.2[,4]<-apply(all.AF0.1[,colnames(all.AF0.1) == "G"], 1, median , na.rm = TRUE)
+  all.AF0.2[is.na(all.AF0.2)]<-0
+  all.AF0.3<-unlist(apply(all.AF0.2, 1, function (x) ifelse(max(x)>0, names(x)[x == max(x)], "N")))
+  
+  #replace the reference allele with the dominant allele for the given patient
+  all.data2$ref<-all.AF0.3
+  
+  # test for the AF 
+  all.AF.test<-all.AF>=vaf
+  all.AF.test[is.na(all.AF.test)]<-FALSE
+  
+  #test for coverage
+  all.cov.test<-all.cov[,4:ncol(all.cov)]>=z
+  all.cov.test[is.na(all.cov.test)]<-FALSE
+  all.cov.test2<-apply(all.cov.test, 1, all)
+  #get combined data
+  combined<-all.AF.test & all.cov.test
+  combined1<-apply(combined, 1 , any)
+  combined2<-combined1&all.cov.test2
+  
+  #extract data that fullfil the conditions
+  all.data2.1<-all.data2[combined2,]
+  all.AF2<-all.AF[combined2,]
+  
+  #make data frame with the AF
+  shared2<-all.data2.1
+  shared2[,4:ncol(shared2)]<-all.AF2
+  
+  
+  #melt the tables into a pivot table
+  shared3<-melt(shared2,id.vars = 1:3, variable.name = "ID", value.name = "AF")
+  
+  #create sample info columns
+  shared4<-separate(shared3, col = 4, sep = "_", remove = FALSE, into = c("allele", "patient", "tissue", "Data"))
+  
+  #create tracking column
+  shared4$tracking<-paste0(shared4$patient, "_", shared4$tissue,"_", shared4$Data)
+  
+  #remove total count
+  shared5<-shared4[shared4$allele != "reads",]
+  
+  #remove counts for reference nucleotides
+  shared5<-shared4[shared4$ref != shared4$allele,]
+  
+  shared6<-dcast (shared5,  chrom + pos + ref + allele ~ tracking , value.var = "AF" )
+  
+  #test if the given mutation is above vaf. I assume that all mutations for the given position fulfil the coverage requirement
+  shared6.test<-shared6[,5: ncol(shared6)]>=vaf
+  shared6.test[is.na(shared6.test)]<-FALSE
+  shared6.test2<-apply(shared6.test, 1, any)
+  
+  #extract the mutations
+  shared8<-shared6[shared6.test2,]
+  
+  shared8[is.na(shared8)]<-0
+  if(sample %in% samples.WGS) {
+    # produce a table of results
+    results<-matrix(nrow =6, ncol = 6)
+    rownames(results)<-colnames(shared8)[5:10]
+    colnames(results)<-colnames(shared8)[5:10]
+    
+    # produce a table of results (p-value)
+    results.p<-matrix(nrow =6, ncol = 6)
+    rownames(results.p)<-colnames(shared8)[5:10]
+    colnames(results.p)<-colnames(shared8)[5:10]
+    
+    
+    
+    
+    
+  } else {
+    # produce a table of results
+    results<-matrix(nrow =4, ncol = 4)
+    rownames(results)<-colnames(shared8)[5:8]
+    colnames(results)<-colnames(shared8)[5:8] 
+    
+    # produce a table of results (p-value)
+    results.p<-matrix(nrow =4, ncol = 4)
+    rownames(results.p)<-colnames(shared8)[5:8]
+    colnames(results.p)<-colnames(shared8)[5:8]
+    
+    
+  }
+  
+  #calculate pearson correlation between the samples
+  for (n in rownames(results)) {
+    for (nn in colnames(results)) {
+      # results[n,nn]<-cor(shared5$AF[shared5$tracking == n],shared5$AF[shared5$tracking == nn], method = "pearson")
+      results[n,nn]<-cor(sqrt(shared8[,colnames(shared8) == n]),sqrt(shared8[,colnames(shared8) == nn]), method = "pearson")
+      results.p[n,nn]<-cor.test(sqrt(shared8[,colnames(shared8) == n]),sqrt(shared8[,colnames(shared8) == nn]), method = "pearson")$p.value
+      
+    }
+    
+  }
+  
+  
+  #create global ID for the samples
+  ID<-(as.data.frame(rownames(results)) %>% separate(1, c("Patient","Tissue","Data"), "_"))[,2:3]
+  ID<-as.data.frame(ID)
+  rownames(ID)<-rownames(results)
+  
+  #create row ID about all mutations
+  rowID<-shared8[,2:4]
+  
+  #add type of mutations data
+  rowID$mut<-factor(paste0(rowID$ref,">",rowID$allele),levels = c("A>C" ,"A>G" ,"A>T", "G>A", "G>C", "G>T","T>G", "T>C", "T>A", "C>T", "C>G", "C>A"))
+  levels(rowID$mut)[levels(rowID$mut) %in% c("A>C" ,"A>G" ,"A>T", "G>A", "G>C", "G>T")]<-c("T>G", "T>C", "T>A", "C>T", "C>G", "C>A")
+  
+
+  barplot(table(rowID$mut), main = paste0("Mutation count - AHM", sample,"\nTotal mutations: ", length(rowID$mut)))
+  
+  # breaksList2=seq(0.00, ceiling(max(sqrt(shared8[,5:ncol(shared8)]))*50)/50, by = 0.02)
+  breaksList2=seq(0.00,1, by = 0.02)
+  
+  
+  #plot unclustered heatmap of all mutations
+  pheatmap(sqrt(shared8[,5:ncol(shared8)]), cluster_cols = FALSE, cluster_rows = FALSE, main = paste0("Variable mutations sqrt(AF) - AHM",sample), annotation_row = rowID, annotation_col = ID, labels_row = shared8$pos, breaks = breaksList2,color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breaksList2)), clustering_distance_rows = "correlation",  clustering_distance_cols = "correlation", clustering_method = "complete")
+  
+  #plot clustered heatmap of all mutations
+  pheatmap(sqrt(shared8[,5:ncol(shared8)]), cluster_cols = TRUE, cluster_rows = TRUE, main = paste0("Variable mutations sqrt(AF) - AHM",sample), annotation_row = rowID, annotation_col = ID, labels_row = shared8$pos, breaks = breaksList2,color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breaksList2)), clustering_distance_rows = "correlation",  clustering_distance_cols = "correlation", clustering_method = "complete")
+  
+  results2<-results
+  
+  rownames(results2)<-paste0(ID[rownames(results),1],"_",ID[rownames(results),2])   
+  colnames(results2)<-paste0(ID[rownames(results),1],"_",ID[rownames(results),2])  
+  
+  results.p2<-results.p
+  
+  rownames(results.p2)<-paste0(ID[rownames(results.p),1],"_",ID[rownames(results.p),2])   
+  colnames(results.p2)<-paste0(ID[rownames(results.p),1],"_",ID[rownames(results.p),2])  
+  
+  breaksList3=seq(floor(min(c((results2),0))*10)/10, 1, by = 0.1)
+  
+  
+  #plot pearson correlation
+  pheatmap(results2,na_col = "black", scale = "none", cluster_cols = FALSE, cluster_rows = FALSE, clustering_distance_rows = as.dist(results2), clustering_distance_cols = as.dist(results2), clustering_method = "complete", main= paste0("AHM",sample," - Pearson correlation"), breaks = breaksList3,color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breaksList3)))
+  
+  
+  #plot pearson correlation with clustering
+  pheatmap(results2,na_col = "black", scale = "none", cluster_cols = TRUE, cluster_rows = TRUE, clustering_distance_rows = as.dist(1-(results2)), clustering_distance_cols = as.dist(1-(results2)), clustering_method = "complete", main= paste0("AHM",sample," - Pearson correlation"), breaks = breaksList3,color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breaksList3)))
+  
+  # dev.off()
+  
+  all.results[[sample]]<-results2
+  all.results.p[[sample]]<-results.p2
+  mutations[[sample]]<-shared8
+} #finish the loop for samples
+
+```
+
+### Pearson correlation all
+
+```{r pearson_all, include=TRUE, echo=TRUE, results='markup', warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 8, fig.width= 10}
+
+#plot all heatmaps on a single page
+plot_list=list()
+for (a in names(all.results)){
+  breaksList4=seq(floor(min(c((all.results[[a]]),0))*10)/10, 1, by = 0.1)
+  
+  plot_list[[a]] <- pheatmap(all.results[[a]],na_col = "black", scale = "none", cluster_cols = TRUE, cluster_rows = TRUE, clustering_distance_rows = as.dist(1-(all.results[[a]])), clustering_distance_cols = as.dist(1-(all.results[[a]])), clustering_method = "complete", main= paste0("AHM",a," - Pearson correlation"), breaks = breaksList4,color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breaksList4)), silent = TRUE)[[4]] ##to save each plot into a list. note the [[4]]
+}
+
+
+FigureS15B<-grid.arrange(arrangeGrob(grobs= plot_list,ncol=4))
+grid.arrange(arrangeGrob(grobs= plot_list,ncol=4))
+
+```
+
+### Pearson correlation vs BE
+
+```{r pearson_BE, include=TRUE, echo=TRUE, results='markup', warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 10}
+
+
+#get the comparison with BE RNA-seq data
+result.BE<-data.frame(matrix(nrow = 0, ncol = 3))
+colnames(result.BE)<-c("Patient", "Comparison", "Correlation")
+result.BE$Comparison<-factor(levels =c("BE_RNA", "BE_WGS","GC_RNA","D2_RNA","NE_RNA","D2_WGS") )
+for (sample in names(all.results)) {
+  result.BE<-rbind(result.BE,data.frame("Patient" = paste0("AHM", rep(sample, ncol(all.results[[sample]]))), "Comparison" = colnames(all.results[[sample]]), "Correlation" = all.results[[sample]]["BE_RNA",] ))
+  
+  
+}
+
+result.BE2<-result.BE[result.BE$Comparison != "ND_WGS",]
+result.BE2$Comparison<-factor(result.BE2$Comparison, levels = levels(result.BE2$Comparison)[c(1,2,6,3,4,5)])
+
+colour_list<-c(colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(14) ,"BE_RNA" = "#00A087FF","BE_WGS"="#00A087AA","NG_RNA" ="#4DBBD5FF","ND_RNA"="#3C5488FF","ND_RNA"="#3C5488AA", "NE_RNA"="dark red")
+names(colour_list)[1:length(levels(result.BE$Patient))]<-levels(result.BE$Patient)
+ggplot(result.BE2, aes(y=Correlation, x=Comparison, fill = Patient) )+ geom_boxplot(show.legend = FALSE, aes(fill = Comparison), outlier.alpha = 0) + geom_point(position = position_jitterdodge(jitter.width = 3, dodge.width = 0, seed = 50014), pch=21, aes(fill = factor(Patient)),size = 2.5)+theme_bw()+ scale_fill_manual(values = colour_list)
+
+mutcount<-sapply(mutations, nrow)
+names(mutcount)<-paste0("AHM",names(mutcount))
+
+kable(mutcount, col.names = "Count", label = "Count of significant mutations")
+
+
+#cast the data to make a matrix for wilcox test for for corrplot
+result.BE3<-dcast(result.BE2, Patient ~ Comparison)
+
+
+
+wilcox.test(result.BE3$NG_RNA, result.BE3$NE_RNA, paired = TRUE, alternative = "greater")
+
+#change the names for the next figure
+rownames(result.BE3)<-paste0(result.BE3$Patient)
+colnames(result.BE3)<-paste0("BE RNA vs ", gsub ("_", " ", colnames(result.BE3)))
+result.BE3<-as.matrix(result.BE3[,2:6])
+result.BE3[is.na(result.BE3)]<-0
+
+
+
+#restructure data for the p-values of correlation
+result.BE.p<-data.frame(matrix(nrow = 0, ncol = 3))
+colnames(result.BE.p)<-c("Patient", "Comparison", "p.val")
+result.BE.p$Comparison<-factor(levels =c("BE_RNA", "BE_WGS","NG_RNA","ND_RNA","NE_RNA","ND_WGS") )
+for (sample in names(all.results.p)) {
+  result.BE.p<-rbind(result.BE.p,data.frame("Patient" = paste0("AHM", rep(sample, ncol(all.results.p[[sample]]))), "Comparison" = colnames(all.results.p[[sample]]), "p.val" = all.results.p[[sample]]["BE_RNA",] ))
+  
+  
+}
+
+result.BE2.p<-result.BE.p[result.BE.p$Comparison != "ND_WGS",]
+result.BE2.p$Comparison<-factor(result.BE2.p$Comparison, levels = levels(result.BE2.p$Comparison)[c(1,2,6,3,4,5)])
+
+
+
+result.BE3.p<-dcast(result.BE2.p, Patient ~ Comparison)
+
+
+rownames(result.BE3.p)<-paste0(result.BE3.p$Patient)
+colnames(result.BE3.p)<-paste0("BE RNA vs ", gsub ("_", " ", colnames(result.BE3.p)))
+result.BE3.p<-as.matrix(result.BE3.p[,2:6])
+
+
+
+
+
+
+
+
+
+corrplot(result.BE3, is.corr = FALSE, method = "circle" , na.label = "NA", addgrid.col = NA, cl.length = 5, tl.col = "black", tl.cex = .75, tl.pos = "tl", col = colorRampPalette(rev(brewer.pal(n = 7, name = "RdBu")))(100), order = "original", tl.srt = 90, cl.lim = c(-1,1), cl.pos = "b")
+
+```
+
+### Pearson correlation vs GC
+
+```{r pearson_GC, include=TRUE, echo=TRUE, results='markup', warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 10}
+
+
+#get the comparison with BE RNA-seq data
+result.NG<-data.frame(matrix(nrow = 0, ncol = 3))
+colnames(result.NG)<-c("Patient", "Comparison", "Correlation")
+result.NG$Comparison<-factor(levels =c("BE_RNA", "BE_WGS","GC_RNA","D2_RNA","NE_RNA","D2_WGS") )
+for (sample in names(all.results)) {
+  result.NG<-rbind(result.NG,data.frame("Patient" = paste0("AHM", rep(sample, ncol(all.results[[sample]]))), "Comparison" = colnames(all.results[[sample]]), "Correlation" = all.results[[sample]]["NG_RNA",] ))
+  
+  
+}
+
+result.NG2<-result.NG[result.NG$Comparison != "",]
+result.NG2$Comparison<-factor(result.NG2$Comparison, levels = levels(result.NG2$Comparison)[c(6,3,4,1,2,5)])
+
+colour_list<-c(colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(14) ,"BE_RNA" = "#00A087FF","BE_WGS"="#00A087AA","NG_RNA" ="#4DBBD5FF","ND_RNA"="#3C5488FF", "ND_RNA"="#3C5488AA", "NE_RNA"="dark red")
+names(colour_list)[1:length(levels(result.NG$Patient))]<-levels(result.NG$Patient)
+ggplot(result.NG2, aes(y=Correlation, x=Comparison, fill = Patient) )+ geom_boxplot(show.legend = FALSE, aes(fill = Comparison), outlier.alpha = 0) + geom_point(position = position_jitterdodge(jitter.width = 3, dodge.width = 0, seed = 50014), pch=21, aes(fill = factor(Patient)),size = 2.5)+theme_bw()+ scale_fill_manual(values = colour_list)
+
+mutcount<-sapply(mutations, nrow)
+names(mutcount)<-paste0("AHM",names(mutcount))
+
+kable(mutcount, col.names = "Count", label = "Count of significant mutations")
+
+
+#cast the data to make a matrix for wilcox test for for corrplot
+result.NG3<-dcast(result.NG2, Patient ~ Comparison)
+
+
+
+wilcox.test(result.NG3$ND_RNA, result.NG3$NE_RNA, paired = TRUE, alternative = "greater")
+
+
+# t.test(result.NG3$ND_RNA, result.NG3$NE_RNA, paired = TRUE, alternative = "greater")
+
+#change the names for the next figure
+rownames(result.NG3)<-paste0(result.NG3$Patient)
+colnames(result.NG3)<-paste0("NG RNA vs ", gsub ("_", " ", colnames(result.NG3)))
+result.NG3<-as.matrix(result.NG3[,2:7])
+result.NG3[is.na(result.NG3)]<-0
+
+
+
+#restructure data for the p-values of correlation
+result.NG.p<-data.frame(matrix(nrow = 0, ncol = 3))
+colnames(result.NG.p)<-c("Patient", "Comparison", "p.val")
+result.NG.p$Comparison<-factor(levels =c("NG_RNA","ND_RNA","ND_WGS","BE_RNA", "BE_WGS","NE_RNA") )
+for (sample in names(all.results.p)) {
+  result.NG.p<-rbind(result.NG.p,data.frame("Patient" = paste0("AHM", rep(sample, ncol(all.results.p[[sample]]))), "Comparison" = colnames(all.results.p[[sample]]), "p.val" = all.results.p[[sample]]["ND_RNA",] ))
+  
+  
+}
+
+result.NG2.p<-result.NG.p[result.NG.p$Comparison != "",]
+result.NG2.p$Comparison<-factor(result.NG2.p$Comparison, levels = levels(result.NG2.p$Comparison)[c(6,3,4,1,2,5)])
+
+
+
+result.NG3.p<-dcast(result.NG2.p, Patient ~ Comparison)
+
+
+rownames(result.NG3.p)<-paste0(result.NG3.p$Patient)
+colnames(result.NG3.p)<-paste0("NG RNA vs ", gsub ("_", " ", colnames(result.NG3.p)))
+result.NG3.p<-as.matrix(result.NG3.p[,2:7])
+
+
+
+
+
+
+
+
+
+corrplot(result.NG3, is.corr = FALSE, method = "circle" , na.label = "NA", addgrid.col = NA, cl.length = 5, tl.col = "black", tl.cex = .75, tl.pos = "tl", col = colorRampPalette(rev(brewer.pal(n = 7, name = "RdBu")))(100), order = "original", tl.srt = 90, cl.lim = c(-1,1), cl.pos = "b")
+
+```
+
+### Mitochondrial distance
+
+```{r mitodistance, include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 10}
+
+
+# produce a table of results
+results.mito<-matrix(nrow =length(all.data), ncol = length(all.data))
+rownames(results.mito)<-names(all.data)
+colnames(results.mito)<-names(all.data)
+
+#conditions
+z=100
+reads=0
+vaf= 0.03
+# positions<-c(302:317, 295, 2617, 3107, 13710)
+
+##Calculate mitodistance
+for (n in 1:length(rownames(results.mito))) {
+  # print(n)
+  for (nn in n:length(colnames(results.mito))) {
+    tmp<-mitodist(all.data[[rownames(results.mito)[n]]],all.data[[colnames(results.mito)[nn]]],z = z, count = reads, vaf = vaf, positions = positions)
+    results.mito[n,nn]<- tmp
+    results.mito[nn,n] <- tmp
+  }
+}
+
+#get ID for samples
+ID<-(as.data.frame(rownames(results.mito)) %>% separate(1, c("Patient","Tissue","Data"), "_"))
+rownames(ID)<-rownames(results.mito)
+```
+
+### Mitochondrial distance all
+
+```{r mitodistance_all, include=TRUE, echo=TRUE, results='markup', warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 8, fig.width= 10}
+
+#plot all heatmaps on a single page
+plot_list=list()
+for (a in unique(ID$Patient)){
+  tmp<-results.mito[rownames(ID[ID$Patient == a,]), rownames(ID[ID$Patient == a,])]
+  
+  breaksList4=seq(0, max(tmp), length.out = 100)
+  
+  plot_list[[a]] <- pheatmap(tmp,na_col = "black", scale = "none", cluster_cols = TRUE, cluster_rows = TRUE, clustering_distance_rows = as.dist(tmp), clustering_distance_cols = as.dist(tmp), clustering_method = "complete", main= paste0("AHM",a), breaks = breaksList4,color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breaksList4)), silent = TRUE)[[4]] ##to save each plot into a list. note the [[4]]
+}
+
+
+#g<-grid.arrange(arrangeGrob(grobs= plot_list,ncol=4))
+grid.arrange(arrangeGrob(grobs= plot_list,ncol=4))
+
+
+```
+
+### Mitochondrial distance vs NG
+
+```{r mitodistace_NG, include=TRUE, echo=TRUE, results='markup', warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 10}
+
+#extract data for BE comparison
+results3<-matrix(ncol = 6, nrow = nrow(results.mito))
+colnames(results3)<-c("BE_RNA", "NG_RNA", "ND_RNA", "NE_RNA", "BE_WGS", "ND_WGS")
+rownames(results3)<-rownames(results.mito)
+
+for ( n in 1:length(rownames(results3))) {
+  tmp<-unlist(strsplit(rownames(results3)[n], "_"))
+  tmp2<-rownames(ID)[ID$Patient == tmp[1]]
+  if (length(tmp2) == 4) { 
+    results3[n,1:4]<-results.mito[n,tmp2]
+  } else
+    results3[n,]<-results.mito[n,tmp2]
+}
+
+
+#extract only required data
+results5<-results3[rownames(ID)[ID$Tissue == "NG" & ID$Data == "RNA"],c(2,1,5,3,6,4)]
+
+
+#make it easier to read by multiplying by 100
+results5.1<-results5*100
+
+rownames(results5.1)<-paste0("AHM",ID[rownames(results5.1),1])
+
+
+#melt for ggplot
+results6<-melt(results5.1)
+
+colnames(results6)<-c("Patient"  ,   "Comparison",  "Distance")
+results6$Comparison<-factor(results6$Comparison, levels = levels(results6$Comparison))
+
+colour_list<-c(colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(14) ,"BE_RNA" = "#00A087FF","BE_WGS"="#00A087AA","NG_RNA" ="#4DBBD5FF","ND_RNA"="#3C5488FF","ND_RNA"="#3C5488AA", "NE_RNA"="dark red")
+names(colour_list)[1:length(levels(results6$Patient))]<-levels(results6$Patient)
+ggplot(results6, aes(y=Distance, x=Comparison, fill = Patient) )+ geom_boxplot(show.legend = FALSE, aes(fill = Comparison), outlier.alpha = 0) + geom_point(position = position_jitterdodge(jitter.width = 3, dodge.width = 0, seed = 50014), pch=21, aes(fill = factor(Patient)),size = 2.5)+theme_bw()+ scale_fill_manual(values = colour_list) + ylab("Distance * 100") + scale_x_discrete(labels=paste0("NG RNA vs ", gsub ("_", " ", colnames(results5.1))))
+
+wilcox.test(results5[,4], results5[,6], paired = TRUE, alternative = "less")
+
+
+results5.1[is.na(results5.1)]<-0
+colnames(results5.1)<-paste0("NG RNA vs ", gsub ("_", " ", colnames(results5.1)))
+corrplot(results5.1, is.corr = FALSE, method = "circle", col = colorRampPalette(brewer.pal(n = 3, name = "Reds"))(50), cl.lim = c(0,.25), addgrid.col = NA, cl.length = 6, tl.col = "black", tl.cex = .75, tl.srt = 45, cl.pos = "b")
+
+results5.1.NG<-results5.1
+results6.NG<-results6
+
+```
+
+### Mitochondrial distance vs BE
+
+```{r mitodistace_BE, include=TRUE, echo=TRUE, results='markup', warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 10}
+
+#extract data for BE comparison
+results3<-matrix(ncol = 6, nrow = nrow(results.mito))
+colnames(results3)<-c("BE_RNA", "NG_RNA", "ND_RNA", "NE_RNA", "BE_WGS", "ND_WGS")
+rownames(results3)<-rownames(results.mito)
+
+for ( n in 1:length(rownames(results3))) {
+  tmp<-unlist(strsplit(rownames(results3)[n], "_"))
+  tmp2<-rownames(ID)[ID$Patient == tmp[1]]
+  if (length(tmp2) == 4) { 
+    results3[n,1:4]<-results.mito[n,tmp2]
+  } else
+    results3[n,]<-results.mito[n,tmp2]
+}
+
+
+#extract only required data
+results5<-results3[rownames(ID)[ID$Tissue == "BE" & ID$Data == "RNA"],c(1,5,2,3,4)]
+
+
+#make it easier to read by multiplying by 100
+results5.1<-results5*100
+
+rownames(results5.1)<-paste0("AHM",ID[rownames(results5.1),1])
+
+
+#melt for ggplot
+results6<-melt(results5.1)
+
+colnames(results6)<-c("Patient"  ,   "Comparison",  "Distance")
+results6$Comparison<-factor(results6$Comparison, levels = levels(results6$Comparison))
+
+colour_list<-c(colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(14) ,"BE_RNA" = "#00A087FF","BE_WGS"="#00A087AA","NG_RNA" ="#4DBBD5FF","ND_RNA"="#3C5488FF", "ND_RNA"="#3C5488AA", "NE_RNA"="dark red")
+names(colour_list)[1:length(levels(results6$Patient))]<-levels(results6$Patient)
+ggplot(results6, aes(y=Distance, x=Comparison, fill = Patient) )+ geom_boxplot(show.legend = FALSE, aes(fill = Comparison), outlier.alpha = 0) + geom_point(position = position_jitterdodge(jitter.width = 3, dodge.width = 0, seed = 50014), pch=21, aes(fill = factor(Patient)),size = 2.5)+theme_bw()+ scale_fill_manual(values = colour_list) + ylab("Distance * 100") + scale_x_discrete(labels=paste0("BE RNA vs ", gsub ("_", " ", colnames(results5.1)))) 
+
+wilcox.test(results5[,3], results5[,5], paired = TRUE, alternative = "less")
+
+
+results5.1[is.na(results5.1)]<-0
+colnames(results5.1)<-paste0("BE RNA vs ", gsub ("_", " ", colnames(results5.1)))
+corrplot(results5.1, is.corr = FALSE, method = "circle", col = colorRampPalette(brewer.pal(n = 3, name = "Reds"))(50), cl.lim = c(0,.25), addgrid.col = NA, cl.length = 6, tl.col = "black", tl.cex = .75, tl.srt = 45, cl.pos = "b")
+
+
+
+
+```
+
+### Output
+
+```{r printpdf, include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 10}
+
+ggsave(paste0(data.path,"./Figure_S15/Figure_S15B.pdf"),FigureS15B, width = 20, height = 15, useDingbats = FALSE)
+
+
+FigureS15A<-ggplot(result.BE2[result.BE2$Comparison !="ND_RNA",], aes(y=Correlation, x=Comparison, fill = Patient) )+ geom_boxplot(show.legend = FALSE, aes(fill = Comparison), outlier.alpha = 0) + geom_point(position = position_jitterdodge(jitter.width = 3, dodge.width = 0, seed = 50014), pch=21, aes(fill = factor(Patient)),size = 2.5)+theme_bw()+ scale_fill_manual(values = colour_list)+ scale_x_discrete(labels=paste0("BE RNA vs ", gsub ("_", " ", levels(results6$Comparison)[levels(results6$Comparison) != "ND_RNA"])))+ stat_compare_means(method = "wilcox.test", paired = TRUE, comparisons = list(c(3,4)),symnum.args = list(cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 1), symbols = c("****", "***", "**", "*", "ns")), method.args =list(alternative = "greater") )
+
+
+ggsave(paste0(data.path,"./Figure_S15/Figure_S15.pdf"),FigureS15A, width = 8, height = 5, useDingbats = FALSE)
+
+
+
+
+Figure3F<-ggplot(results6[results6$Comparison != "ND_RNA",], aes(y=Distance, x=Comparison, fill = Patient) )+ geom_boxplot(show.legend = FALSE, aes(fill = Comparison), outlier.alpha = 0) + geom_point(position = position_jitterdodge(jitter.width = 3, dodge.width = 0, seed = 50014), pch=21, aes(fill = factor(Patient)),size = 2.5)+theme_bw()+ scale_fill_manual(values = colour_list) + ylab("Distance * 100") + scale_x_discrete(labels=paste0("BE RNA vs ", gsub ("_", " ", levels(results6$Comparison)[levels(results6$Comparison) != "ND_RNA"]))) + stat_compare_means(method = "wilcox.test", paired = TRUE, comparisons = list(c(3,4)),symnum.args = list(cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 1), symbols = c("****", "***", "**", "*", "ns")), method.args =list(alternative = "less") )
+
+ggsave(paste0(data.path,"./Figure_3F/Figure_3F.pdf"),Figure3F, width = 8, height = 5, useDingbats = FALSE)
+
+
+
+
+
+FigureS14A<-ggplot(results6.NG[!(results6.NG$Comparison %in% c("BE_RNA","BE_WGS")),], aes(y=Distance, x=Comparison, fill = Patient) )+ geom_boxplot(show.legend = FALSE, aes(fill = Comparison), outlier.alpha = 0) + geom_point(position = position_jitterdodge(jitter.width = 3, dodge.width = 0, seed = 50014), pch=21, aes(fill = factor(Patient)),size = 2.5)+theme_bw()+ scale_fill_manual(values = colour_list) + ylab("Distance * 100")+ scale_x_discrete(labels=paste0("NG RNA vs ", gsub ("_", " ", levels(results6.NG$Comparison)[!(levels(results6.NG$Comparison) %in% c("BE_RNA","BE_WGS"))]))) + stat_compare_means(method = "wilcox.test", paired = TRUE, comparisons = list(c(2,4)),symnum.args = list(cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 1), symbols = c("****", "***", "**", "*", "ns")), method.args =list(alternative = "less") )
+ggsave(paste0(data.path,"./Figure_S14/Figure_S14A.pdf"),FigureS14A, width = 8, height = 5, useDingbats = FALSE)
+
+
+pdf(paste0(data.path,"./Figure_3G/Figure_3G.pdf"), useDingbats = FALSE, width = 5, height = 8)
+
+corrplot(t(results5.1)[c(1:3,5),], is.corr = FALSE, method = "circle", col = colorRampPalette(c("white","white", "blue"))(100)[10:100], cl.lim = c(0,.25), addgrid.col =  "#BEBEBE40", cl.length = 6, tl.col = "black", tl.cex = .75, tl.srt = 45, cl.pos = "r")
+dev.off()
+
+pdf(paste0(data.path,"./Figure_S14/Figure_S14B.pdf"), useDingbats = FALSE, width = 5, height = 8)
+
+corrplot(t(results5.1.NG)[c(1,4,6),], is.corr = FALSE, method = "circle", col = colorRampPalette(c("white","white", "blue"))(100)[10:100], cl.lim = c(0,.25), addgrid.col =  "#BEBEBE40", cl.length = 6, tl.col = "black", tl.cex = .75, tl.srt = 45, cl.pos = "r")
+
+dev.off()
+
+
+
+```
+
+
+## End Matters
+
+
+To finish get session info:
+
+```{r Endnote, echo=FALSE}
+sessionInfo()
+```
+
+
+
+
+
+

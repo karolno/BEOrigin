@@ -1,0 +1,113 @@
+---
+title: "Normalization_2"
+author: "Karol Nowicki-Osuch, based on Nils Eling code"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float:
+      toc_collapsed: true
+    toc_depth: 3
+    number_sections: false
+    theme: paper
+    code_folding: hide
+knit: (function(inputFile, encoding) { rmarkdown::render(inputFile, 
+        encoding = encoding, output_file = '~/Dropbox/Postdoc/2019-12-29_BE2020/Results/Reports/3.4_Normalization_filtered_2.html') })
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+# export RSTUDIO_PANDOC=/usr/lib/rstudio-server/bin/pandoc
+# Rscript -e "library(rmarkdown); render('3.4_Further_processing_filtered.Rmd')"
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Read in the data
+
+```{r libraries, message=FALSE}
+library(scran)
+library(scater)
+library(openxlsx)
+source("../Analysis/Functions/auxiliary.R")
+```
+
+Here, we compute tSNEs, perform clustering and detect marker genes.
+This is done for each sample idenpendently to identify the captured cell types.
+
+```{r data, eval=TRUE}
+sce.list <- readRDS("~/Dropbox/Postdoc/2019-12-29_BE2020/All_sce_filtered.rds")
+
+for(i in 1:length(sce.list)){
+  cur_sce <- sce.list[[i]]
+
+  # tSNE
+  if(!("TSNE" %in% reducedDimNames(cur_sce))){
+    set.seed(1234)
+    cur_sce <- runTSNE(cur_sce)
+  }
+  
+  # Clustering
+  #if(!("Clusters" %in% names(colData(cur_sce)))){
+    HVgenes <- HVG(cur_sce)
+    g <- buildSNNGraph(logcounts(cur_sce)[HVgenes,], k = 10)#, pc.approx = TRUE)
+    cluster <- igraph::cluster_louvain(g)$membership
+    colData(cur_sce)$Clusters <- cluster
+  #}
+
+  # Marker genes
+  if(length(table(cluster)) == 1){next} else if(length(table(cluster)) < 3){
+    cur_markers <- findMarkers(cur_sce, cluster)
+    markers <- lapply(cur_markers, function(n){
+      if(!is.na(n$Top[1])){
+        cur_n <- n[n$FDR < 0.1 & n[,3] > 0,]
+        if(nrow(cur_n) > 0){
+          cur_n$GeneName <- rowData(cur_sce)$Symbol[match(rownames(cur_n), rowData(cur_sce)$ID)]
+        }
+      }
+      else{
+          cur_n <- NULL
+      }
+      cur_n
+    })
+  }  else{
+    markers <- marker.detection(cur_sce, clusters = colData(cur_sce)$Clusters)
+  }
+  if(!dir.exists(paste("~/Dropbox/Postdoc/2019-12-29_BE2020/Results/Marker_genes/Single_sample_filtered/", 
+                            names(sce.list)[i], sep = ""))){
+    dir.create(paste("~/Dropbox/Postdoc/2019-12-29_BE2020/Results/Marker_genes/Single_sample_filtered/", 
+                            names(sce.list)[i], sep = ""))
+  }
+  write.xlsx(markers, paste("~/Dropbox/Postdoc/2019-12-29_BE2020/Results/Marker_genes/Single_sample_filtered/", 
+                            names(sce.list)[i], "/Marker_genes.xlsx", sep = ""))
+
+  sce.list[[i]] <- cur_sce
+}
+
+saveRDS(sce.list, "~/Dropbox/Postdoc/2019-12-29_BE2020/All_sce_filtered.rds")
+```
+
+# Removing lower quality libraries
+
+For further downstream analysis, we exclude lower quality samples.
+Samples are exluded based on manual examination of sample quality.
+Here, we retain at least three samples per tissue type.
+
+```{r exclude-samples, eval=TRUE}
+sce.list <- readRDS("~/Dropbox/Postdoc/2019-12-29_BE2020/All_sce_filtered.rds")
+
+QC <- read.xlsx("~/Dropbox/Postdoc/2019-12-29_BE2020/Additional_files/Library_quality.xlsx")
+sce.good <- sce.list[QC$names[QC$good_quality == "yes"]]
+
+saveRDS(sce.good, "~/Dropbox/Postdoc/2019-12-29_BE2020/All_sce_filtered_high_quality.rds")
+```
+
+# End Matter
+
+To finish get session info:
+
+```{r Endnote, include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE}
+sessionInfo()
+```
+
+

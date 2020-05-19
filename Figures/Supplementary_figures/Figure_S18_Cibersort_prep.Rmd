@@ -1,0 +1,425 @@
+---
+title: "Method validation pseudobulk of scRNA-seq against BE scRNA-seq"
+author: "Karol"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float:
+      toc_collapsed: true
+    toc_depth: 3
+    number_sections: false
+    theme: paper
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+
+## Introduction
+
+Here, I will  get a matrix of genes used for deconvolution of different cell types coming from different tissues. I will then look for them in the cancer and normal RNA-seq data coming from TCGA and other samples and I will use cibersort to deconvolute the data. 
+
+Run this to prepare the data for the analysis in presented in Figure_S18_Cibersort_analysis.Rmd
+
+
+```{r setup, include=FALSE}
+# export RSTUDIO_PANDOC=/usr/lib/rstudio-server/bin/pando
+# Rscript -e "library(rmarkdown); render('Figure_S18_Cibersort_prep_all.Rmd')"
+knitr::opts_chunk$set(	echo=TRUE,
+                       results='asis',
+                       fig.align='center')
+```
+
+```{r setup, , echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE}
+#Environment setup
+library(scran)
+library(openxlsx)
+library(pheatmap)
+library(biomaRt)
+library(Rtsne)
+library(ape)
+
+set.seed(50014)
+source("../../Analysis/Functions/auxiliary.R")
+
+```
+
+## Process single cell RNA-seq data.
+
+```{r process, include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 10}
+#read all data
+sce <- readRDS("~/Dropbox/Postdoc/2019-12-29_BE2020/All_corrected_sce_filtered.rds")
+
+# Exclude contaminating cells
+sce <- sce[,sce$include]
+
+#keep only cells from pure tissue types
+cur.sce<-sce[,colData(sce)$Tissue %in% c("NG","NE","BE", "SMG")]
+
+#replace "_" with "-" in names of cell types
+cur.sce$cell_type<-gsub("_","-",cur.sce$cell_type)
+#replace "_" with "-" in names of cell types
+cur.sce$cell_type_secondary<-gsub("_","-",cur.sce$cell_type_secondary)
+
+#keep only samples with 300 cells per tissue
+cur.sce$Patient_tissue<-paste(cur.sce$Patient, cur.sce$Tissue,sep = "_")
+cell.counts<-table(paste(cur.sce$Patient, cur.sce$Tissue,sep = "_"))
+cur.sce <- cur.sce[,cur.sce$Patient_tissue %in% names(cell.counts[cell.counts>300])]
+
+# I will also remove Myoepithelial cells (very small number of cells from a single patient)
+cur.sce<-cur.sce[,!(cur.sce$cell_type_secondary %in% c("Myo-epithelial"))]
+
+
+#replace tissue names for a generic names for immune and stromal cells
+# cur.sce$Tissue[cur.sce$cell_type %in% c("Immune")]<-"Immune"
+# cur.sce$Tissue[cur.sce$cell_type %in% c("Stromal")]<-"Stromal"
+
+
+#######################
+# Identify markers of immune and stromal cells across all tissue types. It will ignore tissue specificity associated with individual tissue types
+# Batch correction
+sce.list <- split.sce(cur.sce, unique(cur.sce$Sample), colData.name = "Sample")
+
+# Order sce objects for batch correction
+sce.list <- sce.list[order(unlist(lapply(sce.list, ncol)), decreasing = TRUE)]
+
+n <- names(sce.list)
+sce.list <- sce.list[c(which(grepl("NE_out", n)), which(grepl("NG_out", n)),
+                       which(grepl("BE_out", n)), which(grepl("SMG_out", n)))]
+
+corrected <- batch.correction(sce.list)
+cur.sce <- do.call("cbind", sce.list)
+
+# Compute new tSNE
+set.seed(12345)
+tsne <- Rtsne(t(corrected), pca = FALSE, perplexity = 250)
+# Clustering on corrected data
+g <- buildSNNGraph(corrected, k = 10)
+clusters <- igraph::cluster_louvain(g)$membership
+
+# Check what clusters overlap with nonepithelial cell types
+tmp<-reshape2::dcast(plyr::count(cbind(clusters,cur.sce$tissue_type)), formula = x.clusters ~ x.V2, fill = 0)
+nonepi_clust<-tmp$x.clusters[tmp$NonEpithelial == apply(as.matrix(tmp[,2:5]), 1, max)]
+# View(tmp)
+
+# Exclude immune and stromal clusters
+ImmuneTF <- clusters
+ImmuneTF <- ifelse(ImmuneTF %in% nonepi_clust, "nonepi", "epi")
+
+
+# Visualize clustering with low alpha for immune and stromal cells
+ggplot(data.frame(tSNE1 = tsne$Y[,1],
+                  tSNE2 = tsne$Y[,2],
+                  clusters = as.factor(clusters),
+                  ImmuneTF =ImmuneTF)) + 
+  geom_point(aes(tSNE1, tSNE2, colour = clusters, alpha = ImmuneTF), size = 0.5) +
+  scale_alpha_manual(values = c("epi" = 1 , "nonepi" = 0.05)) 
+
+
+# Visualize tsne
+p.all.cells <- ggplot(data.frame(tsne1 = tsne$Y[,1],
+                                 tsne2 = tsne$Y[,2],
+                                 tissue = colData(cur.sce)$Tissue,
+                                 ImmuneTF =ImmuneTF)) + 
+  geom_point(aes(tsne1, tsne2, alpha = ImmuneTF), colour = "black", size = 1) + 
+  geom_point(aes(tsne1, tsne2, colour = tissue, alpha = ImmuneTF), size = 0.5) + 
+  scale_color_manual(values = metadata(cur.sce)$colour_vector) + 
+  scale_alpha_manual(values = c("epi" = 1 , "nonepi" = 0.05)) +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        axis.line = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        legend.background = element_blank(),
+        legend.key = element_blank()
+  ) + 
+  xlab("t-SNE 1")  + 
+  ylab("t-SNE 2") + 
+  guides(colour = guide_legend(override.aes = list(size=4), title = "Tissue")
+  )
+
+p.all.cells
+
+
+# Remove non-expressed genes
+cur_sce <- cur.sce[Matrix::rowSums(counts(cur.sce)) > 0,]
+
+# Perform DE to find marker genes
+DE.genes <- multi.DE(sce = cur_sce, 
+                     conditions = paste0("C",clusters),
+                     covariate = cur_sce$Patient,
+                     lfc = 0.5,
+                     FDR = 0.1)
+
+
+
+# #replace tissue names for a generic names for immune and stromal cells
+cur.sce$Tissue[cur.sce$cell_type %in% c("Immune","Stromal") & ImmuneTF == "nonepi"]<-"NonEpi"
+
+cur.sce$cell_type_secondary[cur.sce$cell_type  %in% c("Stromal", "Immune") & ImmuneTF == "nonepi"] <- paste0("C",clusters[cur.sce$cell_type  %in% c("Stromal", "Immune") & ImmuneTF == "nonepi"])
+# the above does not work for two cells that in tissue specific clustering are considered to be immune cells but here fall into other clusters
+
+
+
+#tracking names
+cell.types<-(paste0(cur.sce$Tissue,"_",cur.sce$cell_type_secondary))
+cell.groups<-(paste0(cur.sce$Tissue,"_",cur.sce$cell_type_secondary,"_",cur.sce$Patient))
+
+# Sum counts with each batch and group
+mat <- matrix(data = NA, ncol = length(unique(cell.groups)), 
+              nrow = nrow(counts(cur.sce)))
+rownames(mat) <- rownames(counts(cur.sce))
+colnames(mat) <- unique(cell.groups)
+
+# Proportion of cells expression the gene
+mat.prop <- matrix(data = NA, ncol = length(unique(cell.groups)), 
+                   nrow = nrow(counts(cur.sce)))
+rownames(mat.prop) <- rownames(counts(cur.sce))
+colnames(mat.prop) <- unique(cell.groups)
+
+
+
+#Calculate the proportion of cells and counts
+for(j in colnames(mat)){
+  cur_tissue <- unlist(strsplit(j, "_"))[1]
+  
+  cur_type <- unlist(strsplit(j, "_"))[2]
+  
+  cur_patient <- unlist(strsplit(j, "_"))[3]
+  
+  mat[,j] <- Matrix::rowSums(as.matrix(counts(cur.sce)[,colData(cur.sce)$Patient == cur_patient 
+                                                       & colData(cur.sce)$Tissue == cur_tissue 
+                                                       & colData(cur.sce)$cell_type_secondary == cur_type]
+  ))
+  
+  mat.prop[,j] <- apply(as.matrix(counts(cur.sce)[,colData(cur.sce)$Patient == cur_patient 
+                                                  & colData(cur.sce)$Tissue == cur_tissue 
+                                                  & colData(cur.sce)$cell_type_secondary == cur_type]
+  ), 1 , function (x) length(x[x>0]))/ncol(as.matrix(counts(cur.sce)[,colData(cur.sce)$Patient == cur_patient 
+                                                                     & colData(cur.sce)$Tissue == cur_tissue 
+                                                                     & colData(cur.sce)$cell_type_secondary == cur_type]))
+  
+}
+
+#change the counts into cpm per tissue per cell type
+mat2<-sweep(mat, 2, colSums(mat)/1000000, `/`)
+
+
+# Get average counts per tissue per cell type (average of patients)
+mat.type <- matrix(data = NA, ncol = length(unique(cell.types)), 
+                   nrow = nrow(counts(cur.sce)))
+rownames(mat.type) <- rownames(counts(cur.sce))
+colnames(mat.type) <- unique(cell.types)
+
+mapping.patient<-unlist(lapply(strsplit(colnames(mat2), "_"), function(x) paste0(x[1],"_", x[2])))
+
+for(i in colnames(mat.type)){
+  mat.type[,i] <- apply(mat2[,mapping.patient == i], 1, function (x) 2^(mean(log2(x+1)))-1)
+}
+
+
+# Get minimal proportion of cells that express the gene in a given cell type
+mat.type.prop <- matrix(data = NA, ncol = length(unique(cell.types)), 
+                        nrow = nrow(counts(cur.sce)))
+rownames(mat.type.prop) <- rownames(counts(cur.sce))
+colnames(mat.type.prop) <- unique(cell.types)
+
+mapping.patient.prop<-unlist(lapply(strsplit(colnames(mat.type), "_"), function(x) paste0(x[1],"_", x[2])))
+
+for(i in colnames(mat.type.prop)){
+  mat.type.prop[,i] <- apply(mat.prop[,mapping.patient == i], 1, min)
+}
+
+
+#read marker genes
+files.dir.paper<-"~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Supplemental_tables/"
+files.names<-c("Table_S2.xlsx"  ,"Table_S4.xlsx"  ,"Table_S5.xlsx" , "Table_S7.xlsx")
+tissues<-c("SMG","NE","NG","BE", "NonEpi")
+names(tissues)<-files.names
+genes<-character()
+
+# get immune markers
+for (i in nonepi_clust) {
+  tmp2 <- DE.genes[[paste0("C",i)]]
+  tmp3<-apply(tmp2[,1:(max(clusters)-1)], 1, min)
+  genes.tmp<-tmp2$ID[tmp3 > 1 & tmp2$FDR <0.1]
+  genes.tmp<-genes.tmp[mat.type.prop[genes.tmp,paste0("NonEpi_C", i)]>0.25]
+  genes<-union(genes,genes.tmp)
+}
+
+for(i in files.names){
+  tmp<-loadWorkbook(paste0(files.dir.paper, i))
+  types <- names(tmp)
+  types2<-gsub("_","-",types)
+  for( ii in 1:length(types)) {
+    if(grepl("Immune|Stromal", types[ii], perl = TRUE)) {
+      next()
+    } else {
+      tmp4<-paste0(tissues[i],"_",types2[ii])
+      #if (tmp4 %in% colnames(mat.type.prop)) { 
+      print(tmp4)
+      tmp2<-read.xlsx(tmp, sheet = types[ii])
+      tmp3<-apply(tmp2[,1:(length(types)-1)], 1, min)
+      genes.tmp<-tmp2$ID[tmp3 > 1 & tmp2$FDR <0.1]
+      genes.tmp<-genes.tmp[mat.type.prop[genes.tmp,which(lapply(colnames(mat.type.prop), function(x) grep(tmp4, x))!=0)]>0.25]
+      genes<-union(genes,genes.tmp)
+      #}
+    }
+  }
+}
+
+#check if the average expression in any of the tissues is over 10
+mat.type2<-mat.type[row.names(mat.type) %in% genes & apply(mat.type, 1, max) >0,]
+
+#remove genes that are associated with cell cycle progression and with protein synthesis (GO: 0007049 and 0006412)
+ensembl = useMart("ensembl")
+ensembl = useDataset("hsapiens_gene_ensembl", mart = ensembl)
+genesrm<-getBM(attributes = c("hgnc_symbol", "ensembl_gene_id"), filter = "go", values = c("GO:0007049", "GO:0006412"), mart = ensembl)
+
+mat.type2<-mat.type2[!(row.names(mat.type2) %in% genesrm$ensembl_gene_id),]
+
+
+#get gene symbols
+gene.Symbols<-rowData(sce)[rowData(sce)$ID %in% rownames(mat.type2),1:2] 
+
+mat.write<-cbind(mat.type2, gene.Symbols[gene.Symbols[,1] == rownames(mat.type2),])
+mat.write2<-cbind(rownames(mat.type2),as.data.frame(mat.type2))
+
+
+
+
+
+#Write the matrix with refseq gene symbols
+colnames(mat.write2)[1]<-"Gene"
+write.xlsx(mat.write, file = paste0("~/Dropbox/Postdoc/2019-12-29_BE2020/Results/CIBERSORT/Results_cpm_stroma_all.xlsx"), rowNames = TRUE)
+write.table(mat.write2, file = paste0("~/Dropbox/Postdoc/2019-12-29_BE2020/Results/CIBERSORT/scRNA-seq_cpm_stroma_all.txt"), quote = FALSE, sep = "\t", row.names = FALSE)
+
+pheatmap(mat.type2, scale = "row", cluster_cols = TRUE, main = "Z-score on expression values for marker genes")
+
+
+
+
+```
+
+## Prepare pseudo bulk data from scRNA-seq
+
+
+```{r prep_pseudobulk, include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 10}
+#get counts per patient (all tissues)
+
+
+#keep only cells from pure tissue types
+# cur.sce<-sce[,colData(sce)$Tissue %in% c("NG","NE","BE", "SMG")]
+
+
+#replace "_" with "-" in names of cell types
+# cur.sce$cell_type<-gsub("_","-",cur.sce$cell_type)
+#tracking names
+cell.types<-(paste0(cur.sce$Tissue,"_",cur.sce$cell_type_secondary))
+cell.groups<-(paste0(cur.sce$Tissue,"_",cur.sce$cell_type_secondary,"_",cur.sce$Patient))
+
+#mat contains all of the counts per patient per cell type per tissue
+
+
+# Sum counts with each batch and group
+mat <- matrix(data = NA, ncol = length(unique(cell.groups)), 
+              nrow = nrow(counts(cur.sce)))
+rownames(mat) <- rownames(counts(cur.sce))
+colnames(mat) <- unique(cell.groups)
+#Calculate the proportion of cells and counts
+for(j in colnames(mat)){
+  cur_tissue <- unlist(strsplit(j, "_"))[1]
+  
+  cur_type <- unlist(strsplit(j, "_"))[2]
+  
+  cur_patient <- unlist(strsplit(j, "_"))[3]
+  
+  mat[,j] <- Matrix::rowSums(as.matrix(counts(cur.sce)[,colData(cur.sce)$Patient == cur_patient 
+                                                       & colData(cur.sce)$Tissue == cur_tissue 
+                                                       & colData(cur.sce)$cell_type_secondary == cur_type]
+  ))
+  
+  
+  
+}
+
+
+# Sum counts with each batch and group
+matb <- matrix(data = 0, ncol = length(unique(cur.sce$Patient)), 
+               nrow = nrow(counts(cur.sce)))
+rownames(matb) <- rownames(counts(cur.sce))
+colnames(matb) <- unique(cur.sce$Patient)
+
+for(j in colnames(mat)){
+  cur_patient <- unlist(strsplit(j, "_"))[3]
+  
+  matb[,cur_patient] <- matb[,cur_patient] + mat[,j]
+  
+}
+
+
+#change the counts into cpm per patient
+matb2<-sweep(matb, 2, colSums(matb)/1000000, `/`)
+
+
+
+mat.writeb2<-cbind(rownames(matb2),as.data.frame(matb2))
+
+
+#Write the matrix with pseudo expression data
+colnames(mat.writeb2)[1]<-"Gene"
+write.xlsx(mat.writeb2, file = paste0("~/Dropbox/Postdoc/2019-12-29_BE2020/Results/CIBERSORT/Pseudo_patient_cpm_all.xlsx"))
+write.table(mat.writeb2, file = paste0("~/Dropbox/Postdoc/2019-12-29_BE2020/Results/CIBERSORT/Pseudo_patient_cpm_all.txt"), quote = FALSE, sep = "\t", row.names = FALSE)
+
+```
+
+## Cell type proportion
+
+```{r cell_prop, include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 10}
+#I need proportion of different cell types per patient to figure out cibersort can produce similar patters
+mat.typeb <- matrix(data = 0, ncol = length(unique(cell.types)), 
+                    nrow = length(unique(cur.sce$Patient)))
+rownames(mat.typeb) <- unique(cur.sce$Patient)
+colnames(mat.typeb) <- unique(cell.types)
+
+for (i in colnames(mat.typeb)) {
+  cur_tissue <- unlist(strsplit(i, "_"))[1]
+  cur_type <- unlist(strsplit(i, "_"))[2]
+  
+  mat.typeb[,i]<-table(factor(cur.sce$Patient[cur.sce$cell_type_secondary == cur_type & cur.sce$Tissue == cur_tissue], levels = rownames(mat.typeb)))
+}
+
+mat.typeb<-mat.typeb/rowSums(mat.typeb)
+
+write.table(mat.typeb, file = paste0("~/Dropbox/Postdoc/2019-12-29_BE2020/Results/CIBERSORT/Cell_proportions_all.txt"), quote = FALSE, sep = "\t", row.names = TRUE, col.names = NA)
+
+
+```
+
+## Run Cibersort
+
+
+```{r , include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 10}
+#read cibersort scripts
+# Due to licence limitations, this code cannot be share in the repository.
+source('../../Analysis/Functions/CIBERSORT_KNO.R')
+
+results<-CIBERSORT("~/Dropbox/Postdoc/2019-12-29_BE2020/Results/CIBERSORT/scRNA-seq_cpm_stroma_all.txt","~/Dropbox/Postdoc/2019-12-29_BE2020/Results/CIBERSORT/Pseudo_patient_cpm_all.txt", perm = 500, QN= FALSE, location = "~/Dropbox/Postdoc/2019-12-29_BE2020/Results/CIBERSORT/OUT_all/")
+
+```
+
+## End Matter
+
+To finish get session info:
+
+```{r Endnote, echo=FALSE}
+sessionInfo()
+```
+
+
+
+
+
+
