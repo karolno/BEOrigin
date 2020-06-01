@@ -208,7 +208,25 @@ PT <- function(rd, clusters, col_vector,
   }
 }
 
+
 #### Batch correction
+
+batch.correction.single <- function(sce, number.HVG = 1000, batches, m.order = NULL) {
+  # Calculate highly variable genes and merge
+  HVG.genes<-modelGeneVar(sce, block = sce[[batches]])
+  HVG.df <- HVG.genes[order(HVG.genes$bio, decreasing = TRUE),]
+  genes <- rownames(HVG.df)[1:number.HVG]
+  
+  if (is.null(m.order)) {
+    m.order(levels(as.factor(sce[[batches]])))
+  }
+  # Batch correction
+  corrected <- batchelor::fastMNN(sce, batch = as.factor(sce[[batches]]), subset.row = genes, merge.order = m.order)
+  
+  t(reducedDim(corrected, "corrected"))
+}
+#### Batch correction
+
 batch.correction <- function(sce, number.HVG = 1000){
   # Calculate highly variable genes and merge
   HVG.genes <- lapply(sce, function(n){
