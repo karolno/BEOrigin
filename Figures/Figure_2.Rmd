@@ -41,6 +41,14 @@ library(gridExtra)
 source("../Analysis/Functions/auxiliary.R")
 
 sce <- readRDS("~/Dropbox/Postdoc/2019-12-29_BE2020/All_corrected_sce_filtered.rds")
+sce <- sce[,sce$include]
+
+# Change cell type names for the paper
+sce$cell_type[sce$cell_type == "KRT5_cells"]<-"C1"
+sce$cell_type[sce$cell_type == "KRT5.KRT7_cells"]<-"C2"
+sce$cell_type[sce$cell_type == "KRT7_cells"]<-"C3"
+sce$cell_type[sce$cell_type == "MUC5B_cells"]<-"C4"
+
 
 sce$cell_type <- factor(sce$cell_type, levels = c(
   "Basal",
@@ -65,10 +73,10 @@ sce$cell_type <- factor(sce$cell_type, levels = c(
   
   "Goblet",
   
-  "KRT5_cells",
-  "KRT5.KRT7_cells",
-  "KRT7_cells",
-  "MUC5B_cells",
+  "C1",
+  "C2",
+  "C3",
+  "C4",
   
   "Mucous",
   "Oncocytes",
@@ -83,7 +91,6 @@ sce$cell_type <- factor(sce$cell_type, levels = c(
 ))
 
 
-sce <- sce[,sce$include]
 ```
 
 ## Marker genes expression
@@ -106,16 +113,18 @@ MUC5B_cells - C4_cells
 ```{r}
 # Select tissues to test
 cur_sce <- sce[,sce$include & sce$Tissue %in% c("NSCJ")]
-
+cur_sce<-batchelor::multiBatchNorm(cur_sce, batch = cur_sce[["Sample"]])
 # Perform batch correction
-sce.list <- split.sce(cur_sce, unique(cur_sce$Sample), colData.name = "Sample")
+# sce.list <- split.sce(cur_sce, unique(cur_sce$Sample), colData.name = "Sample")
 
 # order the samples by size of the sample 
-sce.list <- sce.list[order(unlist(lapply(sce.list, ncol)), decreasing = TRUE)]
+# sce.list <- sce.list[order(unlist(lapply(sce.list, ncol)), decreasing = TRUE)]
 
-corrected <- batch.correction(sce.list)
-cur_sce <- do.call("cbind", sce.list)
+# corrected <- batch.correction(sce.list)
+# cur_sce <- do.call("cbind", sce.list)
 
+batch.order<-order(table(cur_sce[["Sample"]]), decreasing = TRUE)
+corrected <- batch.correction.single(cur_sce, batches = "Sample", m.order = batch.order)
 # Compute new tSNE 
 set.seed(12345)
 tsne <- Rtsne(t(corrected), pca = FALSE, perplexity = 100)
@@ -126,7 +135,8 @@ reducedDims(cur_sce)$TSNE <- tsne$Y
 
 # Temporarily rename the novel clusters
 # For the purpose of the figure the following cluster will be merged into the same colour. Actual clustering was performed in the initial analysis (see Preprocessing folder for 4.4_Tissue_correction_filtered.Rmd - clustering of tissue types and 5.4_Reclustering.Rmd for reclusting)
-cur_sce$cell_type[cur_sce$cell_type %in% c("MUC5B_cells", "KRT7_cells", "KRT5.KRT7_cells", "KRT5_cells")]<-"Novel"
+cell_type.tmp<-cur_sce$cell_type
+cur_sce$cell_type[cur_sce$cell_type %in% c("C1", "C2", "C3", "C4")]<-"Novel"
 
 # Cell type
 colour_vector <- vector(length = length(unique(cur_sce$cell_type)))
@@ -229,9 +239,8 @@ ggsave("~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Figure_2/NSCJ_expression.pdf
 Here, I am only looking at the NSCJ samples and I will be using all cluster names. 
 ```{r}
 # Restore cluster names
-cur_sce <- do.call("cbind", sce.list)
+cur_sce$cell_type <- cell_type.tmp
 
-reducedDims(cur_sce)$TSNE <- tsne$Y
 
 
 # Cell type
@@ -251,10 +260,10 @@ colour_vector["Stromal"] <- "grey60"
 
 # colour_vector["Novel"] <- "orange"
 
-colour_vector["MUC5B_cells"] <- "saddlebrown"
-colour_vector["KRT7_cells"] <- "burlywood3"
-colour_vector["KRT5.KRT7_cells"] <- "burlywood4"
-colour_vector["KRT5_cells"] <- "orange"
+colour_vector["C4"] <- "saddlebrown"
+colour_vector["C3"] <- "burlywood3"
+colour_vector["C2"] <- "burlywood4"
+colour_vector["C1"] <- "orange"
 
 
 
@@ -299,14 +308,14 @@ colnames(nonzeroexpression) <- c("Cell_type", "gene", "proportion")
 
 expression.df <- merge(meanexpression, nonzeroexpression )
 expression.df$gene <- rowData(cur_sce)$Symbol[match (expression.df$gene, rowData(cur_sce)$ID)]
-expression.df$Cell_type <- factor(expression.df$Cell_type, levels = c("Immune", "Stromal", "Basal", "Suprabasal", "Intermediate", "Superficial", "Undifferentiated","Foveolar_Intermediate", "Foveolar_differentiated", "Endocrine", "KRT5_cells", "KRT5.KRT7_cells", "KRT7_cells", "MUC5B_cells"))
+expression.df$Cell_type <- factor(expression.df$Cell_type, levels = c("Immune", "Stromal", "Basal", "Suprabasal", "Intermediate", "Superficial", "Undifferentiated","Foveolar_Intermediate", "Foveolar_differentiated", "Endocrine", "C1", "C2", "C3", "C4"))
 expression.df$gene <- factor(expression.df$gene, levels = genes)
 
 expression.df$Tissue_type <- NA
 expression.df$Tissue_type[expression.df$Cell_type %in% c("Immune", "Stromal")] <- "Nonepithelial"
 expression.df$Tissue_type[expression.df$Cell_type %in% c("Basal", "Suprabasal", "Intermediate", "Superficial")] <- "Oesophageal"
 expression.df$Tissue_type[expression.df$Cell_type %in% c("Undifferentiated","Foveolar_Intermediate", "Foveolar_differentiated", "Endocrine")] <- "Gastric"
-expression.df$Tissue_type[expression.df$Cell_type %in% c("KRT5_cells", "KRT5.KRT7_cells", "KRT7_cells", "MUC5B_cells")] <- "Novel"
+expression.df$Tissue_type[expression.df$Cell_type %in% c("C1", "C2", "C3", "C4")] <- "Novel"
 expression.df$mean_expression2 <- ifelse(expression.df$mean_expression >4, yes = 4, no = expression.df$mean_expression )
 
 
@@ -406,7 +415,6 @@ p.gene.expression<-ggplot(data.frame(tSNE1 =  reducedDims(cur_sce)$TSNE[,1],
                                               panel.background = element_blank(), 
                                               axis.line = element_line(colour = "grey"))
 p.gene.expression
-p.gene.expression
 
 gene<-"KRT7"
 p.gene.expression<-ggplot(data.frame(tSNE1 =  reducedDims(cur_sce)$TSNE[,1],
@@ -417,7 +425,6 @@ p.gene.expression<-ggplot(data.frame(tSNE1 =  reducedDims(cur_sce)$TSNE[,1],
                                               panel.grid.minor = element_blank(),
                                               panel.background = element_blank(), 
                                               axis.line = element_line(colour = "grey"))
-p.gene.expression
 p.gene.expression
 
 gene<-"TP63"
@@ -430,7 +437,7 @@ p.gene.expression<-ggplot(data.frame(tSNE1 =  reducedDims(cur_sce)$TSNE[,1],
                                               panel.background = element_blank(), 
                                               axis.line = element_line(colour = "grey"))
 p.gene.expression
-p.gene.expression
+
 
 gene1 <-"TP63"
 gene2 <-"KRT7"
@@ -489,7 +496,7 @@ ggscatmat(all_data2, columns = 1:4, color = "clusters", ) +
 table(all_data2$clusters)/table(all_data$clusters)
 
 
-all_data2 <- all_data[all_data$clusters %in% c("KRT5_cells", "KRT5.KRT7_cells", "KRT7_cells", "MUC5B_cells"),]
+all_data2 <- all_data[all_data$clusters %in% c("C1", "C2", "C3", "C4"),]
 # all_data2$clusters <- factor(all_data2$clusters)
 ggscatmat(all_data2, columns = 1:4, color = "clusters", ) + 
   scale_color_manual(values = colour_vector)+
@@ -497,7 +504,7 @@ ggscatmat(all_data2, columns = 1:4, color = "clusters", ) +
 
 table(all_data2$clusters)/table(all_data$clusters)
 
-all_data2 <- all_data[all_data$TP63 > 0 & all_data$KRT5 > 0 & all_data$KRT7 > 0 &all_data$clusters %in% c("KRT5_cells", "KRT5.KRT7_cells", "KRT7_cells", "MUC5B_cells"),]
+all_data2 <- all_data[all_data$TP63 > 0 & all_data$KRT5 > 0 & all_data$KRT7 > 0 &all_data$clusters %in% c("C1", "C2", "C3", "C4"),]
 # all_data2$clusters <- factor(all_data2$clusters)
 ggscatmat(all_data2, columns = 1:4, color = "clusters", ) + 
   scale_color_manual(values = colour_vector)+
@@ -565,7 +572,7 @@ DE.genes <- multi.DE(sce = cur_sce,
                      FDR = 0.1)
 
 # Save as table
-write.xlsx(DE.genes, file = "~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Supplemental_tables/Table_S3_NSCJ.xlsx")
+write.xlsx(DE.genes, file = "~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Supplemental_tables/Table_S3.xlsx")
 ```
 
 
@@ -575,17 +582,15 @@ The data is already cluster so I will only visualise it.
 
 
 ```{r}
-# Restore cluster names
-cur_sce <- do.call("cbind", sce.list)
 # Extract corrected dimensions for the selected cells and perform clustering
-corrected2 <- corrected[,colData(cur_sce)$cell_type %in% c("KRT5_cells", "KRT5.KRT7_cells", "KRT7_cells", "MUC5B_cells")]
+corrected2 <- corrected[,colData(cur_sce)$cell_type %in% c("C1", "C2", "C3", "C4")]
 
 # Compute new tSNE
 set.seed(12345)
 tsne2 <- Rtsne(t(corrected2), pca = FALSE, perplexity = 10)
 
 
-cur_sce <- cur_sce[,colData(cur_sce)$cell_type %in% c("KRT5_cells", "KRT5.KRT7_cells", "KRT7_cells", "MUC5B_cells")]
+cur_sce <- cur_sce[,colData(cur_sce)$cell_type %in% c("C1", "C2", "C3", "C4")]
 reducedDims(cur_sce)$TSNE <- tsne2$Y
 
 ## 212 cells
@@ -619,10 +624,10 @@ cat("\n")
 colour_vector <- vector(length = length(unique(cur_sce$cell_type)))
 names(colour_vector) <- unique(cur_sce$cell_type)
 
-colour_vector["MUC5B_cells"] <- "saddlebrown"
-colour_vector["KRT7_cells"] <- "burlywood3"
-colour_vector["KRT5.KRT7_cells"] <- "burlywood4"
-colour_vector["KRT5_cells"] <- "orange"
+colour_vector["C4"] <- "saddlebrown"
+colour_vector["C3"] <- "burlywood3"
+colour_vector["C2"] <- "burlywood4"
+colour_vector["C1"] <- "orange"
 
 
 
@@ -666,11 +671,11 @@ colnames(nonzeroexpression) <- c("Cell_type", "gene", "proportion")
 
 expression.df <- merge(meanexpression, nonzeroexpression )
 expression.df$gene <- rowData(cur_sce)$Symbol[match (expression.df$gene, rowData(cur_sce)$ID)]
-expression.df$Cell_type <- factor(expression.df$Cell_type, levels = c("KRT5_cells", "KRT5.KRT7_cells", "KRT7_cells", "MUC5B_cells"))
+expression.df$Cell_type <- factor(expression.df$Cell_type, levels = c("C1", "C2", "C3", "C4"))
 expression.df$gene <- factor(expression.df$gene, levels = genes)
 
 expression.df$Tissue_type <- NA
-expression.df$Tissue_type[expression.df$Cell_type %in% c("KRT5_cells", "KRT5.KRT7_cells", "KRT7_cells", "MUC5B_cells")] <- "Novel"
+expression.df$Tissue_type[expression.df$Cell_type %in% c("C1", "C2", "C3", "C4")] <- "Novel"
 expression.df$mean_expression2 <- ifelse(expression.df$mean_expression >4, yes = 4, no = expression.df$mean_expression )
 
 
@@ -782,19 +787,17 @@ Here I will visualise all the upper GI tissues and compare the NSCJ samples with
 cur_sce <- sce[,sce$include & sce$Tissue %in% c("SMG", "NG", "NSCJ", "NE")]
 
 
-# Perform batch correction
-sce.list <- split.sce(cur_sce, unique(cur_sce$Sample), colData.name = "Sample")
-# order the samples by size of the sample 
-sce.list <- sce.list[order(unlist(lapply(sce.list, ncol)), decreasing = TRUE)]
+# # Perform batch correction
+# sce.list <- split.sce(cur_sce, unique(cur_sce$Sample), colData.name = "Sample")
 
-# order the samples
-n <- names(sce.list)
-sce.list <- sce.list[c(which(grepl("NSCJ_out", n)), which(grepl("NE_out", n)), 
+
+# order the samples by size of the sample 
+n <- names(sort(table(cur_sce[["Sample"]]), decreasing = TRUE))
+n <- n[c(which(grepl("NSCJ_out", n)), which(grepl("NE_out", n)), 
                        which(grepl("NG_out", n)), which(grepl("SMG_out", n)))]
 
 # The samples are in NSCJ, NE, NG, SMG order  
-corrected <- batch.correction(sce.list)
-cur_sce <- do.call("cbind", sce.list)
+corrected <- batch.correction.single(cur_sce, batches = "Sample", m.order = n)
 
 # Compute new tSNE
 set.seed(12345)
@@ -829,7 +832,7 @@ jittered <- sample(ncol(cur_sce))
 #add new colour for Novel cell types
 colour_vector<-metadata(cur_sce)$colour_vector
 colour_vector["NSCJ_novel"]<-"orange"
-cur_sce$Tissue[cur_sce$cell_type %in% c("MUC5B_cells", "KRT7_cells", "KRT5.KRT7_cells", "KRT5_cells")]<-"NSCJ_novel"
+cur_sce$Tissue[cur_sce$cell_type %in% c("C1", "C2", "C3", "C4")]<-"NSCJ_novel"
 
 # Visualize tsne
 p.all.cells <- ggplot(data.frame(tsne1 = reducedDims(cur_sce)$TSNE[jittered,1],
@@ -862,7 +865,7 @@ p.all.cells
 ggsave("~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Figure_2/All_tissue_types-tsne.pdf", p.all.cells, width = 7, height = 5, useDingbats = FALSE)
 
 # restore annotation
-cur_sce$Tissue[cur_sce$cell_type %in% c("MUC5B_cells", "KRT7_cells", "KRT5.KRT7_cells", "KRT5_cells")]<-"NSCJ"
+cur_sce$Tissue[cur_sce$cell_type %in% c("C1", "C2", "C3", "C4")]<-"NSCJ"
 
 
 # Tissue types
@@ -904,10 +907,10 @@ colour_vector["Oncocytes"] <- "burlywood3"
 colour_vector["Myo-epithelial"] <- "brown"
 colour_vector["Duct_Intercalating"] <- "burlywood4"
 
-colour_vector["MUC5B_cells"] <- "saddlebrown"
-colour_vector["KRT7_cells"] <- "burlywood3"
-colour_vector["KRT5.KRT7_cells"] <- "burlywood4"
-colour_vector["KRT5_cells"] <- "orange"
+colour_vector["C4"] <- "saddlebrown"
+colour_vector["C3"] <- "burlywood3"
+colour_vector["C2"] <- "burlywood4"
+colour_vector["C1"] <- "orange"
 
 
 p.all.cells.cell_type <- ggplot(data.frame(tsne1 = reducedDims(cur_sce)$TSNE[jittered,1],
@@ -972,7 +975,7 @@ expression.df$gene <- rowData(cur_sce)$Symbol[match (expression.df$gene, rowData
 expression.df <- expression.df[!grepl("Immune|Stromal", expression.df$Cell_type),]
 expression.df$Cell_type <- factor(expression.df$Cell_type, levels = c("NE_Basal", "NE_Suprabasal", "NE_Intermediate", "NE_Superficial",
                                                                       "NG_Undifferentiated","NG_Foveolar_Intermediate", "NG_Foveolar_differentiated", "NG_Endocrine", "NG_Parietal", "NG_Chief",
-                                                                      "NSCJ_Basal", "NSCJ_Suprabasal", "NSCJ_Intermediate", "NSCJ_Superficial", "NSCJ_Undifferentiated","NSCJ_Foveolar_Intermediate", "NSCJ_Foveolar_differentiated", "NSCJ_Endocrine", "NSCJ_KRT5_cells", "NSCJ_KRT5.KRT7_cells", "NSCJ_KRT7_cells", "NSCJ_MUC5B_cells",
+                                                                      "NSCJ_Basal", "NSCJ_Suprabasal", "NSCJ_Intermediate", "NSCJ_Superficial", "NSCJ_Undifferentiated","NSCJ_Foveolar_Intermediate", "NSCJ_Foveolar_differentiated", "NSCJ_Endocrine", "NSCJ_C1", "NSCJ_C2", "NSCJ_C3", "NSCJ_C4",
                                                                       "SMG_Duct_Intercalating", "SMG_Mucous", "SMG_Oncocytes", "SMG_Myo-epithelial"))
 expression.df$gene <- factor(expression.df$gene, levels = genes)
 
@@ -980,7 +983,7 @@ expression.df$Tissue_type <- NA
 expression.df$Tissue_type[grepl("Basal|Suprabasal|Intermediate|Superficial", expression.df$Cell_type)] <- "Oesophageal"
 expression.df$Tissue_type[expression.df$Cell_type %in% c("Undifferentiated","Foveolar_Intermediate", "Foveolar_differentiated", "Endocrine")] 
 expression.df$Tissue_type[grepl("Undifferentiated|Foveolar_Intermediate|Foveolar_differentiated|Endocrine|Chief|Parietal", expression.df$Cell_type)] <- "Gastric" 
-expression.df$Tissue_type[grepl("KRT|MUC5B", expression.df$Cell_type)]<- "Novel"
+expression.df$Tissue_type[grepl("C1|C2|C3|C4", expression.df$Cell_type)]<- "Novel"
 expression.df$Tissue_type[grepl("SMG", expression.df$Cell_type)]<- "SMG"
 
 
@@ -1025,14 +1028,14 @@ colnames(nonzeroexpression) <- c("Cell_type", "gene", "proportion")
 
 expression.df <- merge(meanexpression, nonzeroexpression )
 expression.df$gene <- rowData(cur_sce)$Symbol[match (expression.df$gene, rowData(cur_sce)$ID)]
-expression.df$Cell_type <- factor(expression.df$Cell_type, levels = c("Immune", "Stromal", "Basal", "Suprabasal", "Intermediate", "Superficial", "Undifferentiated","Foveolar_Intermediate", "Foveolar_differentiated", "Endocrine", "Chief", "Parietal", "KRT5_cells", "KRT5.KRT7_cells", "KRT7_cells", "MUC5B_cells", "Duct_Intercalating", "Mucous", "Oncocytes", "Myo-epithelial"))
+expression.df$Cell_type <- factor(expression.df$Cell_type, levels = c("Immune", "Stromal", "Basal", "Suprabasal", "Intermediate", "Superficial", "Undifferentiated","Foveolar_Intermediate", "Foveolar_differentiated", "Endocrine", "Chief", "Parietal", "C1", "C2", "C3", "C4", "Duct_Intercalating", "Mucous", "Oncocytes", "Myo-epithelial"))
 expression.df$gene <- factor(expression.df$gene, levels = genes)
 
 expression.df$Tissue_type <- NA
 expression.df$Tissue_type[expression.df$Cell_type %in% c("Immune", "Stromal")] <- "Nonepithelial"
 expression.df$Tissue_type[expression.df$Cell_type %in% c("Basal", "Suprabasal", "Intermediate", "Superficial")] <- "Oesophageal"
 expression.df$Tissue_type[expression.df$Cell_type %in% c("Undifferentiated","Foveolar_Intermediate", "Foveolar_differentiated", "Endocrine","Chief", "Parietal")] <- "Gastric"
-expression.df$Tissue_type[expression.df$Cell_type %in% c("KRT5_cells", "KRT5.KRT7_cells", "KRT7_cells", "MUC5B_cells")] <- "Novel"
+expression.df$Tissue_type[expression.df$Cell_type %in% c("C1", "C2", "C3", "C4")] <- "Novel"
 expression.df$Tissue_type[expression.df$Cell_type %in% c("Duct_Intercalating", "Mucous", "Oncocytes", "Myo-epithelial")] <- "SMG"
 
 expression.df$mean_expression2 <- ifelse(expression.df$mean_expression >4, yes = 4, no = expression.df$mean_expression )
@@ -1083,6 +1086,7 @@ for(i in 1:ncol(mat)){
   colnames(mat)[i] <- unique(as.vector(cur_sce$cell_type[cur_sce$Tissue == sub("_[0-9]*$", "", colnames(mat)[i]) &
                                              cur_sce$Tissue_cluster == sub("^[A-Z2]*_", "", colnames(mat)[i])]))
 }
+
 
 # Calculate euclidean distance on corrected counts
 dend <- hclust(dist(t(mat), method = "euclidean"), method = "ward.D2")
