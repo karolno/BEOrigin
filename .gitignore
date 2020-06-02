@@ -40,3 +40,6 @@ rsconnect/
 
 # Temporary files
 Images/
+
+# Sensitive files
+CIBERSORT_KNO.R
