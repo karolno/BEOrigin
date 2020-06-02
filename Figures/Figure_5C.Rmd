@@ -231,12 +231,12 @@ For the analysis here I use  BE phenotype cell markers. Eso cancers and normal c
 
 ```{r, include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE,fig.height= 11, fig.width= 15}
 #read marker genes for BE and GC
-# Here I am using data from table S8 that has specific marker genes for these tissue types
+# Here I am using data from table S9 that has specific marker genes for these tissue types
 files.dir2<-"~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Supplemental_tables/"
 
 
 #load workbook with marker genes
-tmp<-loadWorkbook(paste0(files.dir2, "Table_S8.xlsx"))
+tmp<-loadWorkbook(paste0(files.dir2, "Table_S9.xlsx"))
 
 #create a list with markers
 markers<-list()
@@ -249,13 +249,13 @@ for (i in names(tmp)) {
 
 
 #read marker genes for endocrine cells
-markers[["Endocrine"]]<-read.xlsx(loadWorkbook(paste0(files.dir2, "Table_S6_2.xlsx")), sheet = "Endocrine_NEUROG3")
+markers[["Endocrine"]]<-read.xlsx(loadWorkbook(paste0(files.dir2, "Table_S7.xlsx")), sheet = "Endocrine_NEUROG3")
 
 # Keep only markers that are over 1 logFC and FDR <0.1
 markers[["Endocrine"]]<-markers[["Endocrine"]][apply(markers[["Endocrine"]][,1:10], 1, min) >1 & markers[["Endocrine"]]$FDR <0.1,]
 
 #read marker genes for goblet cells
-markers[["Goblet"]]<-read.xlsx(loadWorkbook(paste0(files.dir2, "Table_S6_2.xlsx")), sheet = "Goblet")
+markers[["Goblet"]]<-read.xlsx(loadWorkbook(paste0(files.dir2, "Table_S7.xlsx")), sheet = "Goblet")
 
 # Keep only markers that are over 1 logFC and FDR <0.1
 markers[["Goblet"]]<-markers[["Goblet"]][apply(markers[["Goblet"]][,1:10], 1, min) >1 & markers[["Goblet"]]$FDR <0.1,]

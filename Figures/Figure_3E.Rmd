@@ -370,9 +370,9 @@ files.dir<-"~/Dropbox/Postdoc/2019-12-29_BE2020/RNA-seq/"
 
 condition.map<-c("NE" = "NE",
                  "BE" = "BE",
-                 "GC" = "NG"#,
-#                 "D2" = "ND"
+                 "GC" = "NG"
 )
+
 # Set Conditions
 z=100
 vaf=0.03
