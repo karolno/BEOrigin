@@ -46,19 +46,29 @@ sce <- sce[,colData(sce)$Tissue != "ND"]
 Here, we visualize the batch-corrected counts using tsne.
 
 ```{r}
-# Batch correction
-sce.list <- split.sce(sce, unique(sce$Sample), colData.name = "Sample")
+# # Batch correction
+# sce.list <- split.sce(sce, unique(sce$Sample), colData.name = "Sample")
+# 
+# # Order sce objects for batch correction
+# sce.list <- sce.list[order(unlist(lapply(sce.list, ncol)), decreasing = TRUE)]
+# 
+# n <- names(sce.list)
+# sce.list <- sce.list[c(which(grepl("NSCJ_out", n)), which(grepl("BSCJ_out", n)), 
+#                        which(grepl("NE_out", n)), which(grepl("NG_out", n)),
+#                        which(grepl("BE_out", n)), which(grepl("SMG_out", n)))]
+# 
+# corrected <- batch.correction(sce.list)
+# sce <- do.call("cbind", sce.list)
+# order the samples by size of the sample 
+n <- names(sort(table(sce[["Sample"]]), decreasing = TRUE))
+n <- n[c(which(grepl("NSCJ_out", n)), which(grepl("BSCJ_out", n)), 
+         which(grepl("NE_out", n)), which(grepl("NG_out", n)),
+         which(grepl("BE_out", n)), which(grepl("SMG_out", n)))]
 
-# Order sce objects for batch correction
-sce.list <- sce.list[order(unlist(lapply(sce.list, ncol)), decreasing = TRUE)]
+# The samples are in NSCJ, NE, NG, SMG order  
+corrected <- batch.correction.single(sce, batches = "Sample", m.order = n)
 
-n <- names(sce.list)
-sce.list <- sce.list[c(which(grepl("NSCJ_out", n)), which(grepl("BSCJ_out", n)), 
-                       which(grepl("NE_out", n)), which(grepl("NG_out", n)),
-                       which(grepl("BE_out", n)), which(grepl("SMG_out", n)))]
 
-corrected <- batch.correction(sce.list)
-sce <- do.call("cbind", sce.list)
 
 # Compute new tSNE
 set.seed(1234)
@@ -124,9 +134,9 @@ p.all.cells
 # Visualize tsne random order
 jittered <- sample(ncol(sce))
 p.all.cells_random <- ggplot(data.frame(tsne1 = reducedDims(sce)$TSNE[jittered,1],
-                                 tsne2 = reducedDims(sce)$TSNE[jittered,2],
-                                 tissue = colData(sce)$Tissue[jittered],
-                                 ImmuneTF =ImmuneTF[jittered])) + 
+                                        tsne2 = reducedDims(sce)$TSNE[jittered,2],
+                                        tissue = colData(sce)$Tissue[jittered],
+                                        ImmuneTF =ImmuneTF[jittered])) + 
   geom_point(aes(tsne1, tsne2, alpha = ImmuneTF), colour = "black", size = 1) + 
   geom_point(aes(tsne1, tsne2, colour = tissue, alpha = ImmuneTF), size = 0.5) + 
   scale_color_manual(values = metadata(sce)$colour_vector) + 
@@ -151,9 +161,9 @@ p.all.cells_random
 
 # Visualize umap
 p.all.cells.umap <- ggplot(data.frame(UMAP1 = umap$layout[,1],
-                                 UMAP2 = umap$layout[,2],
-                                 tissue = colData(sce)$Tissue,
-                                 ImmuneTF =ImmuneTF)) + 
+                                      UMAP2 = umap$layout[,2],
+                                      tissue = colData(sce)$Tissue,
+                                      ImmuneTF =ImmuneTF)) + 
   geom_point(aes(UMAP1, UMAP2, alpha = ImmuneTF), colour = "black", size = 1) + 
   geom_point(aes(UMAP1, UMAP2, colour = tissue, alpha = ImmuneTF), size = 0.5) + 
   scale_color_manual(values = metadata(sce)$colour_vector) + 
@@ -178,9 +188,9 @@ p.all.cells.umap
 
 # Visualize umap in random rder
 p.all.cells.umap_random <- ggplot(data.frame(UMAP1 = umap$layout[jittered,1],
-                                 UMAP2 = umap$layout[jittered,2],
-                                 tissue = colData(sce)$Tissue[jittered],
-                                 ImmuneTF =ImmuneTF[jittered])) + 
+                                             UMAP2 = umap$layout[jittered,2],
+                                             tissue = colData(sce)$Tissue[jittered],
+                                             ImmuneTF =ImmuneTF[jittered])) + 
   geom_point(aes(UMAP1, UMAP2, alpha = ImmuneTF), colour = "black", size = 1) + 
   geom_point(aes(UMAP1, UMAP2, colour = tissue, alpha = ImmuneTF), size = 0.5) + 
   scale_color_manual(values = metadata(sce)$colour_vector) + 
@@ -353,7 +363,7 @@ for(i in unique(clusters)){
 # Rename the matrix to contain the actual cell-type labels
 for(i in 1:ncol(mat)){
   colnames(mat)[i] <- unique(sce$cell_type_secondary[sce$Tissue == sub("_[0-9]*$", "", colnames(mat)[i]) &
-                                             sce$Tissue_cluster == sub("^[A-Z2]*_", "", colnames(mat)[i])])
+                                                       sce$Tissue_cluster == sub("^[A-Z2]*_", "", colnames(mat)[i])])
 }
 
 # Calculate euclidean distance on corrected counts

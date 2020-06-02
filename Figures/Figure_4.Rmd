@@ -58,16 +58,26 @@ cur_sce <- cur_sce[,!(cur_sce$cell_type %in% c("Chief", "Endocrine", "Goblet", "
 # Remove genes that are not expressed
 cur_sce <- cur_sce[Matrix::rowSums(counts(cur_sce)) > 0,]
 
-# Perform batch correction
-sce.list <- split.sce(cur_sce, unique(cur_sce$Sample), colData.name = "Sample")
+# # Perform batch correction
+# sce.list <- split.sce(cur_sce, unique(cur_sce$Sample), colData.name = "Sample")
+# 
+# # Order sce objects for batch correction
+# sce.list <- sce.list[order(unlist(lapply(sce.list, ncol)), decreasing = TRUE)]
+# sce.list <- sce.list[c(which(grepl("_NG_", names(sce.list))),
+#                        which(grepl("_BE_", names(sce.list))))]
+# 
+# corrected <- batch.correction(sce.list)
+# cur_sce <- do.call("cbind", sce.list)
+n <- names(sort(table(cur_sce[["Sample"]]), decreasing = TRUE))
+n <- n[c(which(grepl("_NG_", n)),
+         which(grepl("_BE_", n)))]
 
-# Order sce objects for batch correction
-sce.list <- sce.list[order(unlist(lapply(sce.list, ncol)), decreasing = TRUE)]
-sce.list <- sce.list[c(which(grepl("_NG_", names(sce.list))),
-                       which(grepl("_BE_", names(sce.list))))]
+# The samples are in NSCJ, NE, NG, SMG order  
+corrected <- batch.correction.single(cur_sce, batches = "Sample", m.order = n)
 
-corrected <- batch.correction(sce.list)
-cur_sce <- do.call("cbind", sce.list)
+
+
+
 
 #Identify the columns containing immune cells
 nonepi<-!(colData(cur_sce)$cell_type %in% c("Immune", "Stromal"))

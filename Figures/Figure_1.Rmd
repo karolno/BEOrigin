@@ -46,17 +46,21 @@ To visualize the gland cells, we perform batch correction across all patients an
 ```{r}
 cur_sce <- sce[,sce$Tissue == "SMG"]
 
-# Split the SCE object into individual patients
-sce.list <- split.sce(cur_sce, unique(cur_sce$Patient), colData.name = "Patient")
+# Perform batch scaling
+cur_sce<-batchelor::multiBatchNorm(cur_sce, batch = cur_sce[["Sample"]])
 
-# Order sce object by size
-sce.list <- sce.list[order(unlist(lapply(sce.list, ncol)), decreasing = TRUE)]
+# # Split the SCE object into individual patients
+# sce.list <- split.sce(cur_sce, unique(cur_sce$Patient), colData.name = "Patient")
+# 
+# # Order sce object by size
+# sce.list <- sce.list[order(unlist(lapply(sce.list, ncol)), decreasing = TRUE)]
+# 
+# corrected<-batch.correction(sce.list)
+batch.order<-order(table(cur_sce[["Sample"]]), decreasing = TRUE)
+corrected <- batch.correction.single(cur_sce, batches = "Sample", m.order = batch.order)
 
-# Perform batch correction
-corrected <- batch.correction(sce.list)
-
-# Merge sce objects
-cur_sce <- do.call("cbind", sce.list)
+# # Merge sce objects
+# cur_sce <- do.call("cbind", sce.list)
 
 # Compute tSNE for gland cells
 set.seed(111)
