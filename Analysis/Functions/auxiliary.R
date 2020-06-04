@@ -62,63 +62,7 @@ HVG <- function(sce, numberGenes = 1000){
   }
 }
 
-HVG.old <- function(sce, numberGenes = 1000){
-  # One single cell expereiment object
-  if(typeof(sce) == "S4"){
-    HVG <- trendVar(sce, use.spikes = FALSE)
-    HVG.1 <- decomposeVar(sce, HVG)
-    HVG.1 <- HVG.1[order(HVG.1$bio, decreasing = TRUE),]
-    rownames(HVG.1)[1:numberGenes]
-  }
-  # Multiple single cell experiment objects
-  else if(typeof(sce) == "list") {
-    HVG.genes <- lapply(sce, function(n){
-      HVG <- trendVar(n, use.spikes = FALSE)
-      decomposeVar(n, HVG)
-    })
-    
-    HVG.df <- do.call("combineVar", HVG.genes)
-    HVG.df <- HVG.df[order(HVG.df$bio, decreasing = TRUE),]
-    rownames(HVG.df)[1:numberGenes]
-  }
-  else{
-    print("First argument must either be a single cell experiment object \n
-          or a list")
-  }
-}
 
-
-#### Clustering
-# Perform clustering using dynamic tree cut
-#DTC <- function(sce, HVG.genes, minClusterSize = 10, deepSplit = 0){
-#  if(typeof(sce) == "S4"){
-#    dist.all <- as.dist(sqrt((1 - cor(as.matrix(logcounts(sce)[HVG.genes,]), 
-#                                      method = "spearman"))/2))
-#    
-#    dendro <- hclust(dist.all, method = "ward.D2")
-#    
-#    ct <- as.character(cutreeDynamic(dendro = dendro, distM = as.matrix(dist.all), 
-#                        minClusterSize = minClusterSize, deepSplit = deepSplit))
-#  }
-#  else {
-#    out <- list()
-#    for(i in 1:length(sce)){
-#      dist.all <- as.dist(sqrt((1 - cor(as.matrix(logcounts(sce[[i]])[HVG.genes[[i]],]), 
-#                                        method = "spearman"))/2))
-#      
-#      dendro <- hclust(dist.all, method = "ward.D2")
-#      
-#      cur_clusters <- paste(names(sce)[i], as.character(cutreeDynamic(dendro = dendro, 
-#                                                      distM = as.matrix(dist.all), 
-#                minClusterSize = minClusterSize, deepSplit = deepSplit)), sep = "_")
-#      names(cur_clusters) <- colData(sce[[i]])$Barcode
-#      
-#      out[[names(sce)[i]]] <- cur_clusters
-#    }
-#    names(out) <- names(sce)
-#    out
-#  }
-#}
 
 #### Find specifc marker genes
 marker.detection <- function(sce, clusters){
@@ -141,30 +85,6 @@ marker.detection <- function(sce, clusters){
   
 }
 
-#### Compute pseudotime with destiny
-#diffusionPT <- function(sce, HVG, clusters, col_vector,
-#               exclude = NULL){
-#  if(!is.null(exclude)){
-#    dm <- DiffusionMap(t(as.matrix(logcounts(sce)[HVG,!exclude])), k = 20)
-#    
-#    plot(dm, col = col_vector[clusters[!exclude]], 
-#         pch = 16, type = "p")
-#    
-#    dpt <- DPT(dm = dm)
-#    
-#    dpt$DPT1
-#  }
-#  else{
-#    dm <- DiffusionMap(t(as.matrix(logcounts(sce)[HVG,])), k = 20)
-#    
-#    plot(dm, col = col_vector[clusters], 
-#         pch = 16, type = "p")
-#    
-#    dpt <- DPT(dm = dm)
-#    
-#    dpt$DPT1
-#  }
-#}
 
 #### Compute pseudorank
 PT <- function(rd, clusters, col_vector, 
@@ -214,8 +134,9 @@ PT <- function(rd, clusters, col_vector,
 batch.correction.single <- function(sce, number.HVG = 1000, batches, m.order = NULL) {
   # Calculate highly variable genes and merge
   HVG.genes<-modelGeneVar(sce, block = sce[[batches]])
-  HVG.df <- HVG.genes[order(HVG.genes$bio, decreasing = TRUE),]
-  genes <- rownames(HVG.df)[1:number.HVG]
+  genes<- getTopHVGs(HVG.genes, n = number.HVG)
+  # HVG.df <- HVG.genes[order(HVG.genes$bio, decreasing = TRUE),]
+  # genes <- rownames(HVG.df)[1:number.HVG]
   
   if (is.null(m.order)) {
     m.order(levels(as.factor(sce[[batches]])))
@@ -250,44 +171,7 @@ batch.correction <- function(sce, number.HVG = 1000){
 }
 
 
-batch.correction.old <- function(sce, number.HVG = 1000){
-  # Calculate highly variable genes and merge
-  HVG.genes <- lapply(sce, function(n){
-    HVG <- trendVar(n, use.spikes = FALSE)
-    decomposeVar(n, HVG)
-  })
-  
-  HVG.df <- do.call("combineVar", HVG.genes)
-  HVG.df <- HVG.df[order(HVG.df$bio, decreasing = TRUE),]
-  genes <- rownames(HVG.df)[1:number.HVG]
-  
-  # Batch correction
-  func <- paste0("batchelor::fastMNN(", 
-                 paste0("as.matrix(logcounts(sce[[", 1:length(sce), "]])[genes,])", collapse=", "), 
-                 ")")
-  corrected <- eval( parse(text=func) )
-  #  t(corrected$corrected)
-  t(reducedDim(corrected, "corrected"))
-}
 
-batch.correction.oldest <- function(sce, number.HVG = 1000){
-  # Calculate highly variable genes and merge
-  HVG.genes <- lapply(sce, function(n){
-    HVG <- trendVar(n, use.spikes = FALSE)
-    decomposeVar(n, HVG)
-  })
-  
-  HVG.df <- do.call("combineVar", HVG.genes)
-  HVG.df <- HVG.df[order(HVG.df$bio, decreasing = TRUE),]
-  genes <- rownames(HVG.df)[1:number.HVG]
-  
-  # Batch correction
-  func <- paste0("mnnCorrect(", 
-                 paste0("as.matrix(logcounts(sce[[", 1:length(sce), "]])[genes,])", collapse=", "), 
-                 ", cos.norm.in=TRUE, cos.norm.out=TRUE, sigma=0.1)")
-  corrected <- eval( parse(text=func) )
-  do.call("cbind", corrected$corrected)
-}
 
 # Differnetial expression testing using edgeR
 DE.edgeR <- function(sce, conditions, covariate, lfc, FDR){
@@ -438,8 +322,8 @@ multi.DE <- function(sce, conditions, covariate, select.marker = TRUE, lfc, FDR)
     
     # Select only genes with throught positive logFC if chosen by user
     if(select.marker){
-      cur_df <- cur_df[apply(cur_df[,1:(ncol(cur_df) - 4)], 1, function(n){
-        sum(n > 0) == ncol(cur_df) - 4
+      cur_df <- cur_df[apply(cur_df[,1:((ncol(cur_df) - 4)/2)], 1, function(n){
+        sum(n > 0) == (ncol(cur_df) - 4)/2
       }),]
     }
     
