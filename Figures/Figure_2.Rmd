@@ -1081,6 +1081,12 @@ for(i in unique(clusters)){
   mat[,i] <- rowMeans(corrected[,clusters == i])
 }
 
+# # Alternative calculation of average consensus
+# for(i in unique(clusters)){
+#   tmp<-apply(corrected[,clusters == i], 1, function (x) {aggregate(x, by  = list(colData(cur_sce)$Patient[clusters ==i]), mean)})
+#   mat[,i] <- unlist(lapply(tmp, function(x){mean(x$x)}))
+# }
+
 # Rename the matrix to contain the actual cell-type labels
 for(i in 1:ncol(mat)){
   colnames(mat)[i] <- unique(as.vector(cur_sce$cell_type[cur_sce$Tissue == sub("_[0-9]*$", "", colnames(mat)[i]) &

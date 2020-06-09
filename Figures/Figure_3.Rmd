@@ -64,7 +64,7 @@ n <- names(sort(table(sce[["Sample"]]), decreasing = TRUE))
 n <- n[c(which(grepl("NSCJ_out", n)), which(grepl("BSCJ_out", n)), 
          which(grepl("NE_out", n)), which(grepl("NG_out", n)),
          which(grepl("BE_out", n)), which(grepl("SMG_out", n)))]
-
+sce<-batchelor::multiBatchNorm(sce, batch = sce[["Sample"]])
 # The samples are in NSCJ, NE, NG, SMG order  
 corrected <- batch.correction.single(sce, batches = "Sample", m.order = n)
 
@@ -328,6 +328,12 @@ for(i in unique(clusters)){
   mat[,i] <- rowMeans(corrected[,clusters == i])
 }
 
+# # Alternative calculation of average consensus
+# for(i in unique(clusters)){
+#   tmp<-apply(corrected[,clusters == i], 1, function (x) {aggregate(x, by  = list(colData(sce)$Sample[clusters ==i]), mean)})
+#   mat[,i] <- unlist(lapply(tmp, function(x){mean(x$x)}))
+# }
+
 # Rename the matrix to contain the actual cell-type labels
 for(i in 1:ncol(mat)){
   colnames(mat)[i] <- unique(sce$cell_type[sce$Tissue == sub("_[0-9]*$", "", colnames(mat)[i]) &
@@ -346,6 +352,54 @@ plot(as.phylo(dend), type = "fan",
 dev.off()
 ```
 
+
+## Plot circular dendrogram of all clusters using highly variable genes
+
+To estimate the similarity between all cell types, we compute an averaged expression profile for each cell-type and perform hierarchical cluster analysis.
+
+```{r, eval = FALSE}
+# We will perform this analysis on the corrected and uncorrected counts (uncorrected in supplements)
+HVG.genes<-modelGeneVar(sce, block = sce[["Sample"]])
+genes<- getTopHVGs(HVG.genes, n = 1000)
+
+
+clusters <- paste(colData(sce)$Tissue, colData(sce)$Tissue_cluster, sep = "_")
+mat <- matrix(data = NA, ncol = length(unique(clusters)), nrow = 1000)
+colnames(mat) <- unique(clusters)
+
+# for(i in unique(clusters)){
+#   mat[,i] <- rowMeans(corrected[,clusters == i])
+# }
+
+# Alternative calculation of average consensus
+for(i in unique(clusters)){
+  tmp<-apply(logcounts(sce)[genes,clusters == i], 1, function (x) {aggregate(x, by  = list(colData(sce)$Sample[clusters ==i]), mean)})
+  mat[,i] <- unlist(lapply(tmp, function(x){mean(x$x)}))
+}
+
+# Rename the matrix to contain the actual cell-type labels
+for(i in 1:ncol(mat)){
+  colnames(mat)[i] <- unique(sce$cell_type[sce$Tissue == sub("_[0-9]*$", "", colnames(mat)[i]) &
+                                             sce$Tissue_cluster == sub("^[A-Z2]*_", "", colnames(mat)[i])])
+}
+
+# Calculate euclidean distance on corrected counts
+# dend <- hclust(dist(t(mat), method = "euclidean"), method = "ward.D2")
+dend <- hclust(as.dist(sqrt(1 - cor(mat, method = "spearman"))/2), method = "ward.D2")
+
+plot(as.phylo(dend), type = "fan", 
+     tip.color = metadata(sce)$colour_vector[sub("_[0-9]*$", "", unique(clusters))])
+
+
+pheatmap(mat, scale = "row", clustering_distance_cols = "correlation", clustering_method = "ward.D2")
+
+# dev.off()
+# pdf("~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Figure_3/Tree_corrected_counts_noND.pdf", width = 10, height = 10, useDingbats = FALSE)
+# plot(as.phylo(dend), type = "fan", 
+#      tip.color = metadata(sce)$colour_vector[sub("_[0-9]*$", "", unique(clusters))])
+# dev.off()
+```
+
 # Plot circular dendrogram of all clusters - alternative names
 
 To estimate the similarity between all cell types, we compute an averaged expression profile for each cell-type and perform hierarchical cluster analysis.
@@ -359,6 +413,12 @@ colnames(mat) <- unique(clusters)
 for(i in unique(clusters)){
   mat[,i] <- rowMeans(corrected[,clusters == i])
 }
+
+# # Alternative calculation of average consensus
+# for(i in unique(clusters)){
+#   tmp<-apply(corrected[,clusters == i], 1, function (x) {aggregate(x, by  = list(colData(sce)$Sample[clusters ==i]), mean)})
+#   mat[,i] <- unlist(lapply(tmp, function(x){mean(x$x)}))
+# }
 
 # Rename the matrix to contain the actual cell-type labels
 for(i in 1:ncol(mat)){
