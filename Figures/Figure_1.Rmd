@@ -44,7 +44,7 @@ sce <- readRDS("~/Dropbox/Postdoc/2019-12-29_BE2020/All_corrected_sce_filtered.r
 To visualize the gland cells, we perform batch correction across all patients and colour cells based on the clustering performed in the Tissue_correction script.
 
 ```{r}
-cur_sce <- sce[,sce$Tissue == "SMG"]
+cur_sce <- sce[,sce$Tissue == "SMG" & sce$include]
 
 # Perform batch scaling
 cur_sce<-batchelor::multiBatchNorm(cur_sce, batch = cur_sce[["Sample"]])
@@ -177,9 +177,9 @@ DE.genes <- multi.DE(sce = cur_sce,
                      lfc = 0.5,
                      FDR = 0.1)
 
-# We first normalize gene expression across all selected cells
-cur_sce <- computeSumFactors(cur_sce, clusters=cur_sce$cell_type)
-cur_sce <- logNormCounts(cur_sce, log = TRUE)
+# # We first normalize gene expression across all selected cells
+# cur_sce <- computeSumFactors(cur_sce, clusters=cur_sce$cell_type)
+# cur_sce <- logNormCounts(cur_sce, log = TRUE)
 
 # Alternative DE
 markers <- marker.detection(cur_sce, clusters = cur_sce$cell_type)
@@ -188,10 +188,10 @@ markers <- marker.detection(cur_sce, clusters = cur_sce$cell_type)
 match(DE.genes$Immune$Symbol, markers$Immune$GeneName)
 match(DE.genes$Duct_Intercalating$Symbol, markers$Duct_Intercalating$GeneName)
 match(DE.genes$Mucous$Symbol, markers$Mucous$GeneName)
-match(DE.genes$Unknown.Doublets$Symbol, markers$Unknown.Doublets$GeneName)
+# match(DE.genes$Unknown.Doublets$Symbol, markers$Unknown.Doublets$GeneName)
 match(DE.genes$Stromal$Symbol, markers$Stromal$GeneName)
 # match(DE.genes$Nonepithelial$Symbol, markers$Nonepithelial$GeneName)
-match(DE.genes$Squamous_Esophagus$Symbol, markers$Squamous_Esophagus$GeneName)
+# match(DE.genes$Squamous_Esophagus$Symbol, markers$Squamous_Esophagus$GeneName)
 match(DE.genes$Oncocytes$Symbol, markers$Oncocytes$GeneName)
 match(DE.genes$Myo_epithelial$Symbol, markers$`Myo-epithelial`$GeneName)
 # match(DE.genes$Dendritic$Symbol, markers$Dendritic$GeneName)
