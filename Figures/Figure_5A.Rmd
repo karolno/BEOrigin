@@ -253,7 +253,7 @@ rowID$Sample.ID<-rowID$Case.ID
 rowID.data<-read.table(paste0(location,"//clinical.tsv"), header = TRUE, sep = "\t", stringsAsFactors = FALSE)
 
 #get information about TCGA samples
-rowID.data2<-read.delim(paste0("/home/karolno/Dropbox/Postdoc/2019-04-15_Cancer-BE/TCGA/", "gdc_sample_sheet.2019-04-16.tsv"), stringsAsFactors = FALSE)
+rowID.data2<-read.delim(paste0("/home/karolno/Dropbox/Postdoc/2019-12-29_BE2020/RNA-seq//TCGA/", "gdc_sample_sheet.2019-04-16.tsv"), stringsAsFactors = FALSE)
 
 #merge
 samples<-rowID.data2[rowID.data2$Sample.ID %in% colnames(data.all), 5:8 ]
