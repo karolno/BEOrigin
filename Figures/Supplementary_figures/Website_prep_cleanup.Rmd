@@ -1,0 +1,656 @@
+---
+title: "Data prep for website"
+author: "Karol Nowicki-Osuch"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float:
+      toc_collapsed: true
+    toc_depth: 3
+    number_sections: false
+    theme: paper
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This script visualizes the full dataset as well as highlighting the sub-populations in the gland cells.
+
+# Read in the data
+
+```{r libraries, message=FALSE}
+library(scran)
+library(scater)
+library(DropletUtils)
+library(openxlsx)
+library(Rtsne)
+library(pheatmap)
+library(viridis)
+library(sceasy) #devtools::install_github("cellgeni/sceasy")
+library(reticulate)
+# library(umap)
+
+source("~/Dropbox/Postdoc/git/BEOrigin/Analysis/Functions/auxiliary.R")
+
+set.seed(123456)
+```
+
+# All data
+
+Fix the annotation of all data and add annotation for cell type.
+
+```{r alldata, message=FALSE}
+# Read in the normalized and batch-corrected reads
+sce.all <- readRDS("~/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/old/alldata.rds")
+
+annot.col <- vector(length = 8)
+names(annot.col) <- unique(colData(sce.all)$Tissue)
+annot.col["NSCJ"] <- "#F39B7F"
+annot.col["BSCJ"] <- "#DC0000"
+annot.col["NE"] <- "#8B0000"
+annot.col["NG"] <- "#4DBBD5"
+annot.col["BE"] <- "#00A087"
+annot.col["ND"] <- "#3C5488"
+annot.col["SMG"] <- "#B09C85"
+annot.col["GM"] <- "#BFE7E1"
+
+
+tsne.corrected <- ggplot(data.frame(tsne1 = reducedDims(sce.all)$TSNE[,1], tsne2 = reducedDims(sce.all)$TSNE[,2], 
+                                    tissue = colData(sce.all)$Tissue)) + 
+  geom_point(aes(tsne1, tsne2, colour = tissue)) + scale_color_manual(values = annot.col) + theme_minimal()
+tsne.corrected 
+
+# Replace samples name
+colData(sce.all)$Sample <- sub(".+(Patient.+?_.+?_.+?)_.+", "\\1", colData(sce.all)$Sample, perl = TRUE)
+
+
+# Introduce cell type for known cells
+sce.good <- readRDS("~/Dropbox/Postdoc/2019-12-29_BE2020/All_corrected_sce_filtered.rds")
+
+colData(sce.good)$Sample <- sub(".+(Patient.+?_.+?_.+?)_.+", "\\1", colData(sce.good)$Sample, perl = TRUE)
+
+colData(sce.all)$cell_type<-"Not_assessed"
+colData(sce.all)$cell_type_secondary<-"Not_assessed"
+colData(sce.all)$tissue_type<-"Not_assessed"
+colData(sce.all)$cell_type[match(paste0(colData(sce.good)$Sample, colData(sce.good)$Barcode),paste0(colData(sce.all)$Sample, colData(sce.all)$Barcode))] <- colData(sce.good)$cell_type
+colData(sce.all)$cell_type_secondary[match(paste0(colData(sce.good)$Sample, colData(sce.good)$Barcode),paste0(colData(sce.all)$Sample, colData(sce.all)$Barcode))] <- colData(sce.good)$cell_type_secondary
+colData(sce.all)$tissue_type[match(paste0(colData(sce.good)$Sample, colData(sce.good)$Barcode),paste0(colData(sce.all)$Sample, colData(sce.all)$Barcode))] <- colData(sce.good)$tissue_type
+
+
+# change the order of columns and keep all continous columns
+colData(sce.all)<-colData(sce.all)[,c(4,3,1,15:17,6:14)]
+
+
+#randomise data
+set.seed(50014)
+jumbled<-sample(1:ncol(sce.all), ncol(sce.all), replace = FALSE)
+sce.all<-sce.all[,jumbled]
+# colData(sce.all)<-colData(sce.all)[jumbled,]
+# reducedDims(sce.all)$TSNE<-reducedDims(sce.all)$TSNE[jumbled,]
+
+# Change coldata into factors
+colData(sce.all)$Tissue <- factor(colData(sce.all)$Tissue, levels = c("NSCJ", "BSCJ", "NE", "NG", "BE", "ND", "SMG", "GM"))
+colData(sce.all)$Patient <- factor(colData(sce.all)$Patient, levels = sort(unique(colData(sce.all)$Patient)))
+colData(sce.all)$Sample <- factor(colData(sce.all)$Sample, levels = sort(unique(colData(sce.all)$Sample)))
+
+cell.levels = c(
+  "Basal",
+  "Suprabasal",
+  "Intermediate",
+  "Superficial",
+  
+  "Undifferentiated",
+  "Endocrine",
+  "Foveolar_Intermediate",
+  "Foveolar_differentiated",
+  "Parietal",
+  "Chief",
+  
+  "Columnar_Undifferentiated",
+  "Columnar_Intermediate",
+  "Columnar_differentiated",
+  
+  "Enterocytes_Intermediate",
+  "Enterocytes_differentiated",
+  "Paneth",
+  
+  "Goblet",
+  
+  "KRT5_cells",
+  "KRT5.KRT7_cells",
+  "KRT7_cells", 
+  "MUC5B_cells",  
+  
+  "Mucous",
+  "Oncocytes",
+  "Duct_Intercalating",
+  "Myo-epithelial",
+  "Unknown.Doublets",
+  
+  "Immune",
+  "Stromal",
+  "Squamous_Esophagus",
+  
+  "Not_assessed"
+)
+
+colData(sce.all)$cell_type <- factor(colData(sce.all)$cell_type, levels = cell.levels)
+levels(colData(sce.all)$cell_type)[18:21]<-paste0("C", 1:4)
+
+cell.levels.2 = c(
+  "Basal", 
+  "Suprabasal",
+  "Suprabasal_Dividing",
+  "Intermediate",             
+  "Superficial",
+  
+  "Undifferentiated", 
+  "Undifferentiated_Dividing",
+  "Foveolar_Intermediate", 
+  "Foveolar_differentiated", 
+  
+  "Endocrine_NEUROG3",  
+  "Endocrine_GHRL",
+  "Endocrine_CHGA",
+  "Endocrine_NEUROD1", 
+  "Parietal",  
+  "Chief",
+  
+  "Columnar_Undifferentiated",
+  "Columnar_Undifferentiated_Dividing",
+  "Columnar_Intermediate",
+  "Columnar_differentiated",
+  
+  "KRT5_cells",
+  "KRT5.KRT7_cells",
+  "MUC5B_cells",        
+  "KRT7_cells", 
+  
+  "Enterocytes_Intermediate",
+  "Enterocytes_differentiated",
+  "Paneth",
+  "Goblet",
+  
+  "Mucous_MUC5B_High",
+  "Oncocytes_MUC5B_Low",
+  "Duct_Intercalating",
+  "Myo-epithelial",
+  
+  "Immune_T-cells",
+  "Immune_B-cells",
+  "Immune_Macrophages",
+  
+  "Stromal_CALD1_cells",
+  "Stromal_GNG11_cells", 
+  "Stromal_ADH1B_cells", 
+  
+  "Squamous_Esophagus", 
+  "Unknown.Doublets",
+  "Not_assessed"
+)
+
+colData(sce.all)$cell_type_secondary <- factor(colData(sce.all)$cell_type_secondary, levels = cell.levels.2)
+levels(colData(sce.all)$cell_type_secondary)[20:23]<-paste0("C", 1:4)
+colData(sce.all)$tissue_type <- factor(colData(sce.all)$tissue_type, levels = c("Squamous", "Columnar", "Glandular", "NonEpithelial", "Not_assessed"))
+
+# Fix the names of genes to make them Refseq
+
+# Remove duplicated genes names
+sce.all<-sce.all[!duplicated(rowData(sce.all)$Symbol),]
+
+# Move Symbol to row name to keep it easy to loead into the data
+rownames(sce.all)<-rowData(sce.all)$Symbol
+
+# randomise expression values nad moved htem to log2 space
+counts(sce.all)<-logcounts(sce.all)#[,jumbled]
+
+gene<-"KRT5"
+p.gene.expression<-ggplot(data.frame(tSNE1 =  reducedDims(sce.all)$TSNE[,1],
+                                     tSNE2 =  reducedDims(sce.all)$TSNE[,2],
+                                     gene = counts(sce.all)[rowData(sce.all)$Symbol == gene,]))  +
+  # gene = logcounts(sce.all)[rowData(sce.all)$Symbol == gene,][jumbled]))  +
+  geom_point(aes(tSNE1, tSNE2, colour = gene), size = 0.5) + scale_colour_viridis(option = "A", name = "log2(Expr)") +
+  guides(alpha=FALSE) + ggtitle(gene) + theme(panel.grid.major = element_blank(), 
+                                              panel.grid.minor = element_blank(),
+                                              panel.background = element_blank(), 
+                                              axis.line = element_line(colour = "grey"))
+p.gene.expression
+
+tsne.corrected <- ggplot(data.frame(tsne1 = reducedDims(sce.all)$TSNE[,1], tsne2 = reducedDims(sce.all)$TSNE[,2], 
+                                    Tissue = colData(sce.all)$Tissue)) + 
+  geom_point(aes(tsne1, tsne2, colour = Tissue)) + scale_color_manual(values = annot.col) + theme_void()
+tsne.corrected 
+
+
+
+
+
+ggsave("~/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/alldata.pdf", 
+       tsne.corrected, 
+       width = 8, height = 7, useDingbats = FALSE)
+
+sceasy:::convertFormat(sce.all, from="sce", to="anndata",
+                       outFile="/home/karolno/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/alldata.h5ad")
+saveRDS(sce.all, "~/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/alldata.rds")
+```
+
+# All data High quality
+
+Fix the annotation of all high quality data.
+
+```{r alldatahighquality, message=FALSE}
+# Read in the normalized and batch-corrected reads
+sce.all <- readRDS("~/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/old/alldatahighquality.rds")
+
+annot.col <- vector(length = 6)
+names(annot.col) <- unique(colData(sce.all)$Tissue)
+annot.col["NSCJ"] <- "#F39B7FFF"
+annot.col["BSCJ"] <- "#DC0000FF"
+annot.col["NE"] <- "darkred"
+annot.col["NG"] <- "#4DBBD5FF"
+annot.col["BE"] <- "#00A087FF"
+# annot.col["ND"] <- "#3C5488FF"
+annot.col["SMG"] <- "#B09C85FF"
+# annot.col["GM"] <- colorRampPalette(c("white", "#00A087FF"))(17)[c(5)]
+
+
+tsne.corrected <- ggplot(data.frame(tsne1 = reducedDims(sce.all)$TSNE[,1], tsne2 = reducedDims(sce.all)$TSNE[,2], 
+                                    tissue = colData(sce.all)$Tissue)) + 
+  geom_point(aes(tsne1, tsne2, colour = tissue)) + scale_color_manual(values = annot.col) + theme_minimal()
+tsne.corrected 
+
+# Replace samples name
+colData(sce.all)$Sample <- sub(".+(Patient.+?_.+?_.+?)_.+", "\\1", colData(sce.all)$Sample, perl = TRUE)
+
+
+# change the order of columns and keep all continous columns
+colData(sce.all)<-colData(sce.all)[,c(4,3,1,17:19,21, 6:13)]
+
+
+#randomise data
+set.seed(50014)
+jumbled<-sample(1:ncol(sce.all), ncol(sce.all), replace = FALSE)
+sce.all<-sce.all[,jumbled]
+# colData(sce.all)<-colData(sce.all)[jumbled,]
+# reducedDims(sce.all)$TSNE<-reducedDims(sce.all)$TSNE[jumbled,]
+
+# Change coldata into factors
+colData(sce.all)$Tissue <- factor(colData(sce.all)$Tissue, levels = c("NSCJ", "BSCJ", "NE", "NG", "BE", "SMG"))
+colData(sce.all)$Patient <- factor(colData(sce.all)$Patient, levels = sort(unique(colData(sce.all)$Patient)))
+colData(sce.all)$Sample <- factor(colData(sce.all)$Sample, levels = sort(unique(colData(sce.all)$Sample)))
+
+cell.levels = c(
+  "Basal",
+  "Suprabasal",
+  "Intermediate",
+  "Superficial",
+  
+  "Undifferentiated",
+  "Endocrine",
+  "Foveolar_Intermediate",
+  "Foveolar_differentiated",
+  "Parietal",
+  "Chief",
+  
+  "Columnar_Undifferentiated",
+  "Columnar_Intermediate",
+  "Columnar_differentiated",
+  
+  "Enterocytes_Intermediate",
+  "Enterocytes_differentiated",
+  "Paneth",
+  
+  "Goblet",
+  
+  "KRT5_cells",
+  "KRT5.KRT7_cells",
+  "KRT7_cells",
+  "MUC5B_cells",
+  
+  "Mucous",
+  "Oncocytes",
+  "Duct_Intercalating",
+  "Myo-epithelial",
+  "Unknown.Doublets",
+  
+  "Immune",
+  "Stromal",
+  "Squamous_Esophagus"#,
+  
+  # "Not_assessed"
+)
+
+colData(sce.all)$cell_type <- factor(colData(sce.all)$cell_type, levels = cell.levels)
+levels(colData(sce.all)$cell_type)[18:21]<-paste0("C", 1:4)
+
+cell.levels.2 = c(
+  "Basal", 
+  "Suprabasal",
+  "Suprabasal_Dividing",
+  "Intermediate",             
+  "Superficial",
+  
+  "Undifferentiated", 
+  "Undifferentiated_Dividing",
+  "Foveolar_Intermediate", 
+  "Foveolar_differentiated", 
+  
+  "Endocrine_NEUROG3",  
+  "Endocrine_GHRL",
+  "Endocrine_CHGA",
+  "Endocrine_NEUROD1", 
+  "Parietal",  
+  "Chief",
+  
+  "Columnar_Undifferentiated",
+  "Columnar_Undifferentiated_Dividing",
+  "Columnar_Intermediate",
+  "Columnar_differentiated",
+  
+  "KRT5_cells",
+  "KRT5.KRT7_cells",
+  "KRT7_cells", 
+  "MUC5B_cells",  
+  
+  "Enterocytes_Intermediate",
+  "Enterocytes_differentiated",
+  "Paneth",
+  "Goblet",
+  
+  "Mucous_MUC5B_High",
+  "Oncocytes_MUC5B_Low",
+  "Duct_Intercalating",
+  "Myo-epithelial",
+  
+  "Immune_T-cells",
+  "Immune_B-cells",
+  "Immune_Macrophages",
+  
+  "Stromal_CALD1_cells",
+  "Stromal_GNG11_cells", 
+  "Stromal_ADH1B_cells", 
+  
+  "Squamous_Esophagus", 
+  "Unknown.Doublets"#,
+  # "Not_assessed"
+)
+
+colData(sce.all)$cell_type_secondary <- factor(colData(sce.all)$cell_type_secondary, levels = cell.levels.2)
+levels(colData(sce.all)$cell_type_secondary)[18:21]<-paste0("C", 1:4)
+
+
+colData(sce.all)$tissue_type <- factor(colData(sce.all)$tissue_type, levels = c("Squamous", "Columnar", "Glandular", "NonEpithelial"))
+
+# Change clustering output into factors
+# colData(sce.all)$Clusters <- factor(colData(sce.all)$Clusters, levels =  sort(unique(colData(sce.all)$Clusters)))
+# colData(sce.all)$Tissue_cluster <- factor(colData(sce.all)$Tissue_cluster, levels =  sort(unique(colData(sce.all)$Tissue_cluster)))
+# colData(sce.all)$Global_cluster <- factor(colData(sce.all)$Global_cluster, levels =  sort(unique(colData(sce.all)$Global_cluster)))
+colData(sce.all)$confidence <- factor(colData(sce.all)$confidence, levels =  sort(unique(colData(sce.all)$confidence), decreasing = TRUE))
+
+# colnames(colData(sce.all))[8] <- "Clustering_per_sample"
+
+
+# Fix the names of genes to make them Refseq
+
+# Remove duplicated genes names
+sce.all<-sce.all[!duplicated(rowData(sce.all)$Symbol),]
+
+# Move Symbol to row name to keep it easy to loead into the data
+rownames(sce.all)<-rowData(sce.all)$Symbol
+
+# randomise expression values nad moved htem to log2 space
+counts(sce.all)<-logcounts(sce.all)#[,jumbled]
+
+gene<-"KRT5"
+p.gene.expression<-ggplot(data.frame(tSNE1 =  reducedDims(sce.all)$TSNE[,1],
+                                     tSNE2 =  reducedDims(sce.all)$TSNE[,2],
+                                     gene = counts(sce.all)[rowData(sce.all)$Symbol == gene,]))  +
+  # gene = logcounts(sce.all)[rowData(sce.all)$Symbol == gene,][jumbled]))  +
+  geom_point(aes(tSNE1, tSNE2, colour = gene), size = 0.5) + scale_colour_viridis(option = "A", name = "log2(Expr)") +
+  guides(alpha=FALSE) + ggtitle(gene) + theme(panel.grid.major = element_blank(), 
+                                              panel.grid.minor = element_blank(),
+                                              panel.background = element_blank(), 
+                                              axis.line = element_line(colour = "grey"))
+p.gene.expression
+
+tsne.corrected <- ggplot(data.frame(tsne1 = reducedDims(sce.all)$TSNE[,1], tsne2 = reducedDims(sce.all)$TSNE[,2], 
+                                    Tissue = colData(sce.all)$Tissue)) + 
+  geom_point(aes(tsne1, tsne2, colour = Tissue)) + scale_color_manual(values = annot.col) + theme_void()
+tsne.corrected 
+
+
+
+
+
+ggsave("~/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/alldatahighquality.pdf", 
+       tsne.corrected, 
+       width = 8, height = 7, useDingbats = FALSE)
+
+sceasy:::convertFormat(sce.all, from="sce", to="anndata",
+                       outFile="/home/karolno/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/alldatahighquality.h5ad")
+saveRDS(sce.all, "~/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/alldatahighquality.rds")
+```
+
+# Individual Tissues
+
+Fix the annotation of individual tissues
+
+```{r Individual, message=FALSE}
+for (tissue in c("SMG", "NSCJ", "NE", "NG", "ND", "BE")) {
+  # Read in the normalized and batch-corrected reads
+  sce.all <- readRDS(paste0("~/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/old/", tissue, ".rds"))
+  
+  annot.col <- vector(length = 8)
+  names(annot.col) <- unique(colData(sce.all)$Tissue)
+  annot.col["NSCJ"] <- "#F39B7FFF"
+  annot.col["BSCJ"] <- "#DC0000FF"
+  annot.col["NE"] <- "darkred"
+  annot.col["NG"] <- "#4DBBD5FF"
+  annot.col["BE"] <- "#00A087FF"
+  annot.col["ND"] <- "#3C5488FF"
+  annot.col["SMG"] <- "#B09C85FF"
+  annot.col["GM"] <- colorRampPalette(c("white", "#00A087FF"))(17)[c(5)]
+  
+  
+  tsne.corrected <- ggplot(data.frame(tsne1 = reducedDims(sce.all)$TSNE[,1], tsne2 = reducedDims(sce.all)$TSNE[,2], 
+                                      tissue = colData(sce.all)$Tissue)) + 
+    geom_point(aes(tsne1, tsne2, colour = tissue)) + scale_color_manual(values = annot.col) + theme_minimal()
+  print(tsne.corrected)
+  
+  # Replace samples name
+  colData(sce.all)$Sample <- sub(".+(Patient.+?_.+?_.+?)_.+", "\\1", colData(sce.all)$Sample, perl = TRUE)
+  
+  
+  # change the order of columns and keep all continous columns
+  colData(sce.all)<-colData(sce.all)[,c(3,1,17:19,21, 6:13)]
+  
+  
+  #randomise data
+  set.seed(50014)
+  jumbled<-sample(1:ncol(sce.all), ncol(sce.all), replace = FALSE)
+  sce.all<-sce.all[,jumbled]
+  # colData(sce.all)<-colData(sce.all)[jumbled,]
+  # reducedDims(sce.all)$TSNE<-reducedDims(sce.all)$TSNE[jumbled,]
+  
+  # Change coldata into factors
+  # colData(sce.all)$Tissue <- factor(colData(sce.all)$Tissue, levels = c("NSCJ", "BSCJ", "NE", "NG", "BE", "ND", "SMG"))
+  colData(sce.all)$Patient <- factor(colData(sce.all)$Patient, levels = sort(unique(colData(sce.all)$Patient)))
+  colData(sce.all)$Sample <- factor(colData(sce.all)$Sample, levels = sort(unique(colData(sce.all)$Sample)))
+  
+  cell.levels = c(
+    "Basal",
+    "Suprabasal",
+    "Intermediate",
+    "Superficial",
+    
+    "Undifferentiated",
+    "Endocrine",
+    "Foveolar_Intermediate",
+    "Foveolar_differentiated",
+    "Parietal",
+    "Chief",
+    
+    "Columnar_Undifferentiated",
+    "Columnar_Intermediate",
+    "Columnar_differentiated",
+    
+    "Enterocytes_Intermediate",
+    "Enterocytes_differentiated",
+    "Paneth",
+    
+    "Goblet",
+    
+    "C1",
+    "C2",
+    "C3",
+    "C4",
+    
+    "KRT5_cells",
+    "KRT5.KRT7_cells",
+    "KRT7_cells", 
+    "MUC5B_cells",  
+    
+    "Mucous",
+    "Oncocytes",
+    "Duct_Intercalating",
+    "Myo-epithelial",
+    "Unknown.Doublets",
+    
+    "Immune",
+    "Stromal",
+    "Squamous_Esophagus"#,
+    
+    # "Not_assessed"
+  )
+  
+  colData(sce.all)$cell_type <- factor(colData(sce.all)$cell_type, levels = cell.levels[cell.levels %in% unique(colData(sce.all)$cell_type)])
+  print(levels(colData(sce.all)$cell_type))
+  cell.levels.2 = c(
+    "Basal", 
+    "Suprabasal",
+    "Suprabasal_Dividing",
+    "Intermediate",             
+    "Superficial",
+    
+    "Undifferentiated", 
+    "Undifferentiated_Dividing",
+    "Foveolar_Intermediate", 
+    "Foveolar_differentiated", 
+    
+    "Endocrine_NEUROG3",  
+    "Endocrine_GHRL",
+    "Endocrine_CHGA",
+    "Endocrine_NEUROD1", 
+    "Parietal",  
+    "Chief",
+    
+    "Columnar_Undifferentiated",
+    "Columnar_Undifferentiated_Dividing",
+    "Columnar_Intermediate",
+    "Columnar_differentiated",
+    
+    "KRT5_cells",
+    "KRT5.KRT7_cells",
+    "KRT7_cells", 
+    "MUC5B_cells",  
+    
+    "Enterocytes_Intermediate",
+    "Enterocytes_differentiated",
+    "Paneth",
+    "Goblet",
+    
+    "Mucous_MUC5B_High",
+    "Oncocytes_MUC5B_Low",
+    "Duct_Intercalating",
+    "Myo-epithelial",
+    
+    "Immune_T-cells",
+    "Immune_B-cells",
+    "Immune_Macrophages",
+    
+    "Stromal_CALD1_cells",
+    "Stromal_GNG11_cells", 
+    "Stromal_ADH1B_cells", 
+    
+    "Squamous_Esophagus", 
+    "Unknown.Doublets"#,
+    # "Not_assessed"
+  )
+  
+  colData(sce.all)$cell_type_secondary <- factor(colData(sce.all)$cell_type_secondary, levels =  cell.levels.2[cell.levels.2 %in% unique(colData(sce.all)$cell_type_secondary)])
+  print(levels(colData(sce.all)$cell_type_secondary))
+  
+  if(tissue == "NSCJ") {
+    levels(colData(sce.all)$cell_type_secondary)[11:14]<-paste0("C", 1:4)
+
+  }
+  
+  colData(sce.all)$tissue_type <- factor(colData(sce.all)$tissue_type, levels = c("Squamous", "Columnar", "Glandular", "NonEpithelial"))
+  
+  # Change clustering output into factors
+  # colData(sce.all)$Clusters <- factor(colData(sce.all)$Clusters, levels =  sort(unique(colData(sce.all)$Clusters)))
+  # colData(sce.all)$Tissue_cluster <- factor(colData(sce.all)$Tissue_cluster, levels =  sort(unique(colData(sce.all)$Tissue_cluster)))
+  # colData(sce.all)$Global_cluster <- factor(colData(sce.all)$Global_cluster, levels =  sort(unique(colData(sce.all)$Global_cluster)))
+  colData(sce.all)$confidence <- factor(colData(sce.all)$confidence, levels =  sort(unique(colData(sce.all)$confidence), decreasing = TRUE))
+  
+  # colnames(colData(sce.all))[8] <- "Clustering_per_sample"
+  
+  
+  # Fix the names of genes to make them Refseq
+  
+  # Remove duplicated genes names
+  sce.all<-sce.all[!duplicated(rowData(sce.all)$Symbol),]
+  
+  # Move Symbol to row name to keep it easy to loead into the data
+  rownames(sce.all)<-rowData(sce.all)$Symbol
+  
+  # randomise expression values nad moved htem to log2 space
+  counts(sce.all)<-logcounts(sce.all)#[,jumbled]
+  
+  gene<-"KRT5"
+  p.gene.expression<-ggplot(data.frame(tSNE1 =  reducedDims(sce.all)$TSNE[,1],
+                                       tSNE2 =  reducedDims(sce.all)$TSNE[,2],
+                                       gene = counts(sce.all)[rowData(sce.all)$Symbol == gene,]))  +
+    # gene = logcounts(sce.all)[rowData(sce.all)$Symbol == gene,][jumbled]))  +
+    geom_point(aes(tSNE1, tSNE2, colour = gene), size = 0.5) + scale_colour_viridis(option = "A", name = "log2(Expr)") +
+    guides(alpha=FALSE) + ggtitle(gene) + theme(panel.grid.major = element_blank(), 
+                                                panel.grid.minor = element_blank(),
+                                                panel.background = element_blank(), 
+                                                axis.line = element_line(colour = "grey"))
+  print(p.gene.expression)
+  
+  tsne.corrected <- ggplot(data.frame(tsne1 = reducedDims(sce.all)$TSNE[,1], tsne2 = reducedDims(sce.all)$TSNE[,2], 
+                                      Cell_Type = colData(sce.all)$cell_type)) + 
+    geom_point(aes(tsne1, tsne2, colour = Cell_Type)) +
+    # scale_color_manual(values = annot.col) + 
+    theme_void()
+  print(tsne.corrected)
+  
+  
+  
+  
+  
+  ggsave(paste0("~/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/", tissue, ".pdf"), 
+         tsne.corrected, 
+         width = 8, height = 7, useDingbats = FALSE)
+  
+  sceasy:::convertFormat(sce.all, from="sce", to="anndata",
+                         outFile=paste0("/home/karolno/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/", tissue, ".h5ad"))
+  saveRDS(sce.all, paste0("~/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/", tissue, ".rds"))
+}
+```
+
+# End Matter
+
+To finish get session info:
+
+```{r Endnote, include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE}
+sessionInfo()
+```
+
+

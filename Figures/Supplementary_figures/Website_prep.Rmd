@@ -1,0 +1,630 @@
+---
+title: "Data prep for website"
+author: "Karol Nowicki-Osuch"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float:
+      toc_collapsed: true
+    toc_depth: 3
+    number_sections: false
+    theme: paper
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This script visualizes the full dataset as well as highlighting the sub-populations in the gland cells.
+
+# Read in the data
+
+```{r libraries, message=FALSE}
+library(scran)
+library(scater)
+library(DropletUtils)
+library(openxlsx)
+library(Rtsne)
+library(pheatmap)
+library(viridis)
+library(sceasy) #devtools::install_github("cellgeni/sceasy")
+library(reticulate)
+# library(umap)
+
+source("~/Dropbox/Postdoc/git/BEOrigin/Analysis/Functions/auxiliary.R")
+
+set.seed(123456)
+```
+
+# All data
+
+Here I prepare tSNE and data in format that is identical to figure S8 after batch correction. This data has little annotation but is important for review of all samples.
+
+```{r alldata, message=FALSE}
+# Read in the normalized and batch-corrected reads
+sce.list <- readRDS("~/Dropbox/Postdoc/2019-12-29_BE2020/All_sce_filtered.rds")
+
+# Order sce objects for batch correction
+sce.list <- sce.list[order(unlist(lapply(sce.list, ncol)), decreasing = TRUE)]
+
+n <- names(sce.list)
+sce.list <- sce.list[c(which(grepl("NSCJ", n)), which(grepl("BSCJ", n)), 
+                       which(grepl("NE", n)), which(grepl("NG", n)),
+                       which(grepl("BE", n)), which(grepl("ND", n)),
+                       which(grepl("SMG", n)), which(grepl("GM", n)))]
+
+# Remove all unecessary rowData prior to merging
+sce.list <- lapply(sce.list, function(n){
+  rowData(n) <- rowData(n)[,1:3]
+  n
+})
+
+#merge datasets
+sce.all <- do.call("cbind", sce.list)
+
+# Batch correction
+corrected <- batch.correction(sce.list)
+
+# Save batch corrected counts in metdata
+metadata(sce.all)$corrected <- corrected
+
+# Compute new tSNE
+# set.seed(11111)
+tsne <- Rtsne(t(corrected), pca = FALSE, perplexity = 250)
+# Store tsne in slot
+reducedDims(sce.all)$TSNE <- tsne$Y[,1:2]
+
+annot <- paste(colData(sce.all)$Tissue, colData(sce.all)$Patient, sep = "_")
+
+annot.col <- vector(length = length(unique(annot)))
+names(annot.col) <- unique(annot)
+annot.col[grepl("NE", names(annot.col))] <- colorRampPalette(c("white", "darkred"))(21)[c(5,7,9,11,13,15,17,19,21)]
+annot.col[grepl("NSCJ", names(annot.col))] <- colorRampPalette(c("white", "#F39B7FFF"))(21)[c(7,9,11,13,15,17,19,21)]
+annot.col[grepl("BSCJ", names(annot.col))] <- colorRampPalette(c("white", "#DC0000FF"))(17)[c(13,15,17)]
+annot.col[grepl("BE", names(annot.col))] <- colorRampPalette(c("white", "#00A087FF"))(17)[c(6,9,13,16)]
+annot.col[grepl("ND", names(annot.col))] <- colorRampPalette(c("white", "#3C5488FF"))(17)[c(5,9,13,17)]
+annot.col[grepl("NG", names(annot.col))] <- colorRampPalette(c("white", "#4DBBD5FF"))(25)[c(5,7,9,11,13,15,17,19,21,23,25)]
+annot.col[grepl("SMG", names(annot.col))] <- colorRampPalette(c("white", "#B09C85FF"))(17)[c(5,9,13)]
+annot.col[grepl("GM", names(annot.col))] <- colorRampPalette(c("white", "#00A087FF"))(17)[c(5)]
+
+tsne.corrected <- ggplot(data.frame(tsne1 = tsne$Y[,1], tsne2 = tsne$Y[,2], 
+                                    Sample = annot)) + 
+  geom_point(aes(tsne1, tsne2, colour = Sample)) + scale_colour_manual(values = annot.col) + theme_minimal()
+tsne.corrected 
+
+
+annot.col <- vector(length = 8)
+names(annot.col) <- unique(colData(sce.all)$Tissue)
+annot.col["NSCJ"] <- "#F39B7FFF"
+annot.col["BSCJ"] <- "#DC0000FF"
+annot.col["NE"] <- "darkred"
+annot.col["NG"] <- "#4DBBD5FF"
+annot.col["BE"] <- "#00A087FF"
+annot.col["ND"] <- "#3C5488FF"
+annot.col["SMG"] <- "#B09C85FF"
+annot.col["GM"] <- colorRampPalette(c("white", "#00A087FF"))(17)[c(5)]
+
+
+tsne.corrected <- ggplot(data.frame(tsne1 = reducedDims(sce.all)$TSNE[,1], tsne2 = reducedDims(sce.all)$TSNE[,2], 
+                                    tissue = colData(sce.all)$Tissue)) + 
+  geom_point(aes(tsne1, tsne2, colour = tissue)) + scale_color_manual(values = annot.col) + theme_minimal()
+tsne.corrected 
+
+
+
+sceasy:::convertFormat(sce.all, from="sce", to="anndata",
+                       outFile="/home/karolno/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/alldata.h5ad")
+saveRDS(sce.all, "~/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/alldata.rds")
+```
+
+# All good data
+
+Here I prepare tSNE and data in format that is identical to figure 3A after batch correction. This data has all annotation about cell types, tissue and my confidence into the assigned tissue type.
+
+```{r allgood, message=FALSE}
+# Read in the normalized and batch-corrected reads (only from good samples)
+sce <- readRDS("~/Dropbox/Postdoc/2019-12-29_BE2020/All_corrected_sce_filtered.rds")
+
+# Exclude contaminating cells
+sce <- sce[,sce$include]
+
+# Exclude duodenum cells
+sce <- sce[,colData(sce)$Tissue != "ND"]
+
+
+n <- names(sort(table(sce[["Sample"]]), decreasing = TRUE))
+n <- n[c(which(grepl("NSCJ_out", n)), which(grepl("BSCJ_out", n)), 
+         which(grepl("NE_out", n)), which(grepl("NG_out", n)),
+         which(grepl("BE_out", n)), which(grepl("SMG_out", n)))]
+sce<-batchelor::multiBatchNorm(sce, batch = sce[["Sample"]])
+# The samples are in NSCJ, NE, NG, SMG order  
+corrected <- batch.correction.single(sce, batches = "Sample", m.order = n)
+
+# Save batch corrected counts in metdata
+metadata(sce)$corrected <- corrected
+
+# Compute new tSNE
+set.seed(1234)
+tsne <- Rtsne(t(corrected), pca = FALSE, perplexity = 250)
+
+reducedDims(sce)<-NULL
+reducedDims(sce)$TSNE <- tsne$Y
+
+
+tsne.corrected <- ggplot(data.frame(tsne1 = tsne$Y[,1], tsne2 = tsne$Y[,2], 
+                                    tissue = colData(sce)$Tissue)) + 
+  geom_point(aes(tsne1, tsne2, colour = tissue)) + scale_color_manual(values = metadata(sce)$colour_vector) + theme_minimal()
+tsne.corrected 
+
+
+sceasy:::convertFormat(sce, from="sce", to="anndata",
+                       outFile="/home/karolno/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/alldatahighquality.h5ad")
+saveRDS(sce, "~/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/alldatahighquality.rds")
+```
+
+# SMG data
+
+Here I prepare tSNE and data in format that is identical to figure 1C after batch correction. This data has all annotation about cell types, tissue and my confidence into the assigned tissue type.
+
+```{r SMG, message=FALSE}
+# Read in the normalized and batch-corrected reads (only from good samples)
+sce <- readRDS("~/Dropbox/Postdoc/2019-12-29_BE2020/All_corrected_sce_filtered.rds")
+
+# Select only SMG cells
+cur_sce <- sce[,sce$Tissue == "SMG" & sce$include]
+
+# Perform batch scaling
+cur_sce<-batchelor::multiBatchNorm(cur_sce, batch = cur_sce[["Sample"]])
+
+# batch correction
+batch.order<-order(table(cur_sce[["Sample"]]), decreasing = TRUE)
+corrected <- batch.correction.single(cur_sce, batches = "Sample", m.order = batch.order)
+
+# Compute tSNE for gland cells
+set.seed(111)
+smg_tsne <- Rtsne(t(corrected), pca = FALSE)
+
+# Save batch corrected counts in metdata
+metadata(cur_sce)$corrected <- corrected
+
+reducedDims(cur_sce)<-NULL
+reducedDims(cur_sce)$TSNE <- smg_tsne$Y
+
+# Create colour vecotr for glands
+colour_vector <-  vector(length = length(unique(cur_sce$cell_type)))
+names(colour_vector) <- unique(cur_sce$cell_type)
+colour_vector["Immune"] <- "grey40"
+colour_vector["Unknown.Doublets"] <- "white"
+colour_vector["Mucous"] <- "saddlebrown"
+colour_vector["Oncocytes"] <- "burlywood3"
+colour_vector["Stromal"] <- "grey60"
+# colour_vector["Nonepithelial"] <- "grey80"
+colour_vector["Duct_Intercalating"] <- "burlywood4"
+colour_vector["Squamous_Esophagus"] <- "black"
+colour_vector["Myo-epithelial"] <- "brown"
+# colour_vector["Dendritic"] <- "grey20"
+
+p.smg <- ggplot(data.frame(tsne1 = smg_tsne$Y[,1],
+                           tsne2 = smg_tsne$Y[,2],
+                           cell_type = as.factor(cur_sce$cell_type))) +
+  geom_point(aes(tsne1, tsne2), colour = "black", size = 2) + 
+  geom_point(aes(tsne1, tsne2, colour = cell_type)) + 
+  scale_color_manual(values = colour_vector) + 
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        axis.line = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        legend.background = element_blank(),
+        legend.key = element_blank()
+  ) + 
+  xlab("t-SNE 1")  + 
+  ylab("t-SNE 2") + 
+  guides(colour = guide_legend(override.aes = list(size=4), title = "Cell Type")
+  )
+
+p.smg
+
+
+sceasy:::convertFormat(cur_sce, from="sce", to="anndata",
+                       outFile="/home/karolno/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/SMG.h5ad")
+saveRDS(cur_sce, "~/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/SMG.rds")
+```
+
+# NSCJ data
+
+Here I prepare tSNE and data in format that is identical to figure 2A after batch correction. This data has all annotation about cell types, tissue and my confidence into the assigned tissue type.
+
+```{r NSCJ, message=FALSE}
+# Read in the normalized and batch-corrected reads (only from good samples)
+sce <- readRDS("~/Dropbox/Postdoc/2019-12-29_BE2020/All_corrected_sce_filtered.rds")
+sce <- sce[,sce$include]
+
+# Change cell type names for the paper
+sce$cell_type[sce$cell_type == "KRT5_cells"]<-"C1"
+sce$cell_type[sce$cell_type == "KRT5.KRT7_cells"]<-"C2"
+sce$cell_type[sce$cell_type == "KRT7_cells"]<-"C3"
+sce$cell_type[sce$cell_type == "MUC5B_cells"]<-"C4"
+
+
+sce$cell_type <- factor(sce$cell_type, levels = c(
+  "Basal",
+  "Suprabasal",
+  "Intermediate",
+  "Superficial",
+  
+  "Undifferentiated",
+  "Endocrine",
+  "Foveolar_Intermediate",
+  "Foveolar_differentiated",
+  "Parietal",
+  "Chief",
+  
+  "Columnar_Undifferentiated",
+  "Columnar_Intermediate",
+  "Columnar_differentiated",
+  
+  "Enterocytes_Intermediate",
+  "Enterocytes_differentiated",
+  "Paneth",
+  
+  "Goblet",
+  
+  "C1",
+  "C2",
+  "C3",
+  "C4",
+  
+  "Mucous",
+  "Oncocytes",
+  "Duct_Intercalating",
+  "Myo-epithelial",
+  "Unknown.Doublets",
+  
+  "Immune",
+  "Stromal",
+  "Squamous_Esophagus",
+  "Novel"
+))
+
+cur_sce <- sce[,sce$include & sce$Tissue %in% c("NSCJ")]
+cur_sce<-batchelor::multiBatchNorm(cur_sce, batch = cur_sce[["Sample"]])
+
+# Perform batch correction
+batch.order<-order(table(cur_sce[["Sample"]]), decreasing = TRUE)
+corrected <- batch.correction.single(cur_sce, batches = "Sample", m.order = batch.order)
+# Compute new tSNE 
+set.seed(12345)
+tsne <- Rtsne(t(corrected), pca = FALSE, perplexity = 100)
+
+# Save batch corrected counts in metdata
+metadata(cur_sce)$corrected <- corrected
+
+reducedDims(cur_sce)<-NULL
+reducedDims(cur_sce)$TSNE <- tsne$Y
+
+# Cell type
+colour_vector <- vector(length = length(unique(cur_sce$cell_type)))
+names(colour_vector) <- unique(cur_sce$cell_type)
+colour_vector["Superficial"] <- colorRampPalette(c("white", "dark red"))(10)[10]
+colour_vector["Basal"] <- colorRampPalette(c("white", "dark red"))(10)[4]
+colour_vector["Suprabasal"] <- colorRampPalette(c("white", "dark red"))(10)[6]
+colour_vector["Intermediate"] <- colorRampPalette(c("white", "dark red"))(10)[8]
+
+colour_vector["Foveolar_differentiated"] <- colorRampPalette(c("white", "#4DBBD5FF"))(10)[10]
+colour_vector["Endocrine"] <- colorRampPalette(c("white", "dark blue"))(10)[10]
+colour_vector["Undifferentiated"] <- colorRampPalette(c("white", "#4DBBD5FF"))(10)[3]
+colour_vector["Foveolar_Intermediate"] <- colorRampPalette(c("white", "#4DBBD5FF"))(10)[6]
+colour_vector["Immune"] <- "grey40"
+colour_vector["Stromal"] <- "grey60"
+
+# colour_vector["Novel"] <- "orange"
+
+colour_vector["C4"] <- "saddlebrown"
+colour_vector["C3"] <- "burlywood3"
+colour_vector["C2"] <- "burlywood4"
+colour_vector["C1"] <- "orange"
+
+
+
+p.all.cells.cell_type_all <- ggplot(data.frame(tsne1 = reducedDims(cur_sce)$TSNE[,1],
+                                               tsne2 = reducedDims(cur_sce)$TSNE[,2],
+                                               tissue = colData(cur_sce)$cell_type)) +
+  geom_point(aes(tsne1, tsne2), colour = "black", size = 1) + 
+  geom_point(aes(tsne1, tsne2, colour = tissue), size = 0.5) + 
+  scale_color_manual(values = colour_vector) + 
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        axis.line = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        legend.background = element_blank(),
+        legend.key = element_blank()) + 
+  xlab("t-SNE 1")  + 
+  ylab("t-SNE 2") + 
+  guides(colour = guide_legend(override.aes = list(size=4), title = "Cell Type"))
+
+p.all.cells.cell_type_all
+
+
+sceasy:::convertFormat(cur_sce, from="sce", to="anndata",
+                       outFile="/home/karolno/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/NSCJ.h5ad")
+saveRDS(cur_sce, "~/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/NSCJ.rds")
+```
+
+# NE data
+
+Here I prepare tSNE and data in format that is identical to figure S9A after batch correction. This data has all annotation about cell types, tissue and my confidence into the assigned tissue type.
+
+```{r NE, message=FALSE}
+# Read in the normalized and batch-corrected reads (only from good samples)
+sce <- readRDS("~/Dropbox/Postdoc/2019-12-29_BE2020/All_corrected_sce_filtered.rds")
+
+# Remove contaminating cell-types
+sce <- sce[,sce$include]
+
+# Select NE data
+cur_sce <- sce[,sce$Tissue == "NE"]
+
+# Split the samples to perform batch correction
+sce.list <- split.sce(cur_sce, unique(cur_sce$Sample), colData.name = "Sample")
+
+# Order sce object by size
+sce.list <- sce.list[order(unlist(lapply(sce.list, ncol)), decreasing = TRUE)]
+
+
+cur_sce <- do.call("cbind", sce.list)
+corrected <- batch.correction(sce.list)
+
+# Compute tSNE
+set.seed(12345)
+tsne <- Rtsne(t(corrected), pca = FALSE, perplexity = 100)
+
+# Save batch corrected counts in metdata
+metadata(cur_sce)$corrected <- corrected
+
+reducedDims(cur_sce)<-NULL
+reducedDims(cur_sce)$TSNE <- tsne$Y
+
+# Create colour vector
+colour_vector <- vector(length = length(unique(cur_sce$cell_type_secondary)))
+names(colour_vector) <- unique(cur_sce$cell_type_secondary)
+colour_vector["Immune_T-cells"] <- "grey20"
+colour_vector["Immune_Macrophages"] <- "grey40"
+
+colour_vector["Superficial"] <- colorRampPalette(c("white", "dark red"))(10)[10]
+colour_vector["Basal"] <- colorRampPalette(c("white", "dark red"))(10)[4]
+colour_vector["Suprabasal"] <- colorRampPalette(c("white", "dark red"))(10)[6]
+colour_vector["Intermediate"] <- colorRampPalette(c("white", "dark red"))(10)[8]
+colour_vector["Suprabasal_Dividing"] <- colorRampPalette(c("white", "dark red"))(10)[1]
+
+tsne.NE <- ggplot(data.frame(tSNE1 = tsne$Y[,1],
+                             tSNE2 = tsne$Y[,2],
+                             cell_type = cur_sce$cell_type_secondary)) + 
+  geom_point(aes(tSNE1, tSNE2), colour = "black", size = 2) +
+  geom_point(aes(tSNE1, tSNE2, colour = cell_type)) +
+  scale_color_manual(values = colour_vector) + theme_minimal()
+tsne.NE
+
+
+sceasy:::convertFormat(cur_sce, from="sce", to="anndata",
+                       outFile="/home/karolno/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/NE.h5ad")
+saveRDS(cur_sce, "~/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/NE.rds")
+```
+
+# NG data
+
+Here I prepare tSNE and data in format that is identical to figure S9C after batch correction. This data has all annotation about cell types, tissue and my confidence into the assigned tissue type.
+
+```{r NG, message=FALSE}
+# Read in the normalized and batch-corrected reads (only from good samples)
+sce <- readRDS("~/Dropbox/Postdoc/2019-12-29_BE2020/All_corrected_sce_filtered.rds")
+
+# Remove contaminating cell-types
+sce <- sce[,sce$include]
+
+# Select NG cells
+cur_sce <- sce[,sce$Tissue == "NG"]
+
+# Split the samples to perform batch correction
+sce.list <- split.sce(cur_sce, unique(cur_sce$Sample), colData.name = "Sample")
+# Order sce object by size
+sce.list <- sce.list[order(unlist(lapply(sce.list, ncol)), decreasing = TRUE)]
+
+cur_sce <- do.call("cbind", sce.list)
+corrected <- batch.correction(sce.list)
+
+# Compute tSNE
+set.seed(12345)
+tsne <- Rtsne(t(corrected), pca = FALSE, perplexity = 100)
+
+# Save batch corrected counts in metdata
+metadata(cur_sce)$corrected <- corrected
+
+reducedDims(cur_sce)<-NULL
+reducedDims(cur_sce)$TSNE <- tsne$Y
+
+# Create colour vector
+colour_vector <- vector(length = length(unique(cur_sce$cell_type_secondary)))
+names(colour_vector) <- unique(cur_sce$cell_type_secondary)
+# colour_vector["Immune"] <- "grey40"
+# colour_vector["Stromal"] <- "grey60"
+colour_vector["Immune_T-cells"] <- "grey20"
+colour_vector["Immune_B-cells"] <- "grey30"
+colour_vector["Immune_Macrophages"] <- "grey40"
+colour_vector["Stromal_CALD1_cells"] <- "grey60"
+colour_vector["Stromal_GNG11_cells"] <- "grey70"
+
+
+colour_vector["Foveolar_differentiated"] <- colorRampPalette(c("white", "#4DBBD5FF"))(10)[10]
+colour_vector["Undifferentiated"] <- colorRampPalette(c("white", "#4DBBD5FF"))(10)[3]
+colour_vector["Foveolar_Intermediate"] <- colorRampPalette(c("white", "#4DBBD5FF"))(10)[6]
+colour_vector["Chief"] <- colorRampPalette(c("white", "dark blue"))(10)[6]
+colour_vector["Parietal"] <- colorRampPalette(c("white", "dark blue"))(10)[3]
+colour_vector["Undifferentiated_Dividing"] <- colorRampPalette(c("white", "dark blue"))(10)[1]
+
+colour_vector["Endocrine_GHRL"] <- colorRampPalette(c("white", "#5900D8FF"))(10)[10]
+colour_vector["Endocrine_CHGA"] <- colorRampPalette(c("white", "#5900D8FF"))(10)[7]
+colour_vector["Endocrine_NEUROD1"] <- colorRampPalette(c("white", "#5900D8FF"))(10)[4]
+
+
+tsne.GC <- ggplot(data.frame(tSNE1 = tsne$Y[,1],
+                             tSNE2 = tsne$Y[,2],
+                             cell_type = cur_sce$cell_type_secondary)) + 
+  geom_point(aes(tSNE1, tSNE2), colour = "black", size = 2) +
+  geom_point(aes(tSNE1, tSNE2, colour = cell_type)) +
+  scale_color_manual(values = colour_vector) + theme_minimal()
+tsne.GC
+
+
+sceasy:::convertFormat(cur_sce, from="sce", to="anndata",
+                       outFile="/home/karolno/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/NG.h5ad")
+saveRDS(cur_sce, "~/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/NG.rds")
+```
+
+# ND data
+
+Here I prepare tSNE and data in format that is identical to figure S9E after batch correction. This data has all annotation about cell types, tissue and my confidence into the assigned tissue type.
+
+```{r ND, message=FALSE}
+# Read in the normalized and batch-corrected reads (only from good samples)
+sce <- readRDS("~/Dropbox/Postdoc/2019-12-29_BE2020/All_corrected_sce_filtered.rds")
+
+# Remove contaminating cell-types
+sce <- sce[,sce$include]
+
+# Select ND cells
+cur_sce <- sce[,sce$Tissue == "ND"]
+
+# Split the samples to perform batch correction
+sce.list <- split.sce(cur_sce, unique(cur_sce$Sample), colData.name = "Sample")
+# Order sce object by size
+sce.list <- sce.list[order(unlist(lapply(sce.list, ncol)), decreasing = TRUE)]
+
+cur_sce <- do.call("cbind", sce.list)
+corrected <- batch.correction(sce.list)
+
+# Compute tSNE
+set.seed(12345)
+tsne <- Rtsne(t(corrected), pca = FALSE, perplexity = 100)
+
+# Save batch corrected counts in metdata
+metadata(cur_sce)$corrected <- corrected
+
+reducedDims(cur_sce)<-NULL
+reducedDims(cur_sce)$TSNE <- tsne$Y
+
+# Create colour vector
+colour_vector <- vector(length = length(unique(cur_sce$cell_type_secondary)))
+names(colour_vector) <- unique(cur_sce$cell_type_secondary)
+colour_vector["Immune_T-cells"] <- "grey20"
+colour_vector["Immune_B-cells"] <- "grey30"
+colour_vector["Immune_Macrophages"] <- "grey40"
+colour_vector["Stromal_CALD1_cells"] <- "grey60"
+colour_vector["Stromal_GNG11_cells"] <- "grey70"
+
+colour_vector["Enterocytes_Intermediate"] <- colorRampPalette(c("white", "#3C5488FF"))(10)[6]
+colour_vector["Enterocytes_differentiated"] <- colorRampPalette(c("white", "#3C5488FF"))(10)[10]
+colour_vector["Undifferentiated_Dividing"] <- colorRampPalette(c("white", "#3C5488FF"))(10)[3]
+colour_vector["Undifferentiated"] <- colorRampPalette(c("white", "#3C5488FF"))(10)[1]
+colour_vector["Goblet"] <- colorRampPalette(c("white", "seagreen4"))(10)[10]
+colour_vector["Paneth"] <- colorRampPalette(c("white", "seagreen4"))(10)[6]
+colour_vector["Endocrine_CHGA"] <- colorRampPalette(c("white", "dark blue"))(10)[10]
+
+tsne.D2 <- ggplot(data.frame(tSNE1 = tsne$Y[,1],
+                             tSNE2 = tsne$Y[,2],
+                             cell_type = cur_sce$cell_type_secondary)) + 
+  geom_point(aes(tSNE1, tSNE2), colour = "black", size = 2) + 
+  geom_point(aes(tSNE1, tSNE2, colour = cell_type)) +
+  scale_color_manual(values = colour_vector) + theme_minimal()
+tsne.D2
+
+sceasy:::convertFormat(cur_sce, from="sce", to="anndata",
+                       outFile="/home/karolno/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/ND.h5ad")
+saveRDS(cur_sce, "~/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/ND.rds")
+```
+
+# BE data
+
+Here I prepare tSNE and data in format that is identical to figure S10D and supplementary note SN3 after batch correction. This data has all annotation about cell types, tissue and my confidence into the assigned tissue type.
+
+```{r BE, message=FALSE}
+# Read in the normalized and batch-corrected reads (only from good samples)
+sce <- readRDS("~/Dropbox/Postdoc/2019-12-29_BE2020/All_corrected_sce_filtered.rds")
+
+# Remove contaminating cell-types
+cur_sce <- sce[,sce$Tissue == "BE" & sce$include]
+
+# Only genes that are expressed
+cur_sce <- cur_sce[Matrix::rowSums(logcounts(cur_sce)) > 0,]
+
+# Normalization across all cells
+cur_sce <- computeSumFactors(cur_sce, clusters=paste(cur_sce$cell_type_secondary))
+cur_sce <- logNormCounts(cur_sce, log = TRUE)
+
+
+# Split the samples to perform batch correction
+sce.list <- split.sce(cur_sce, unique(cur_sce$Sample), colData.name = "Sample")
+# Order sce object by size
+sce.list <- sce.list[order(unlist(lapply(sce.list, ncol)), decreasing = TRUE)]
+
+cur_sce <- do.call("cbind", sce.list)
+corrected <- batch.correction(sce.list)
+
+# Compute tSNE
+set.seed(12345)
+tsne <- Rtsne(t(corrected), pca = FALSE, perplexity = 100)
+
+# Save batch corrected counts in metdata
+metadata(cur_sce)$corrected <- corrected
+
+reducedDims(cur_sce)<-NULL
+reducedDims(cur_sce)$TSNE <- tsne$Y
+
+# Create colour vector
+colour_vector <- vector(length = length(unique(cur_sce$cell_type_secondary)))
+names(colour_vector) <- unique(cur_sce$cell_type_secondary)
+colour_vector["Immune_T-cells"] <- "grey20"
+colour_vector["Immune_B-cells"] <- "grey30"
+colour_vector["Immune_Macrophages"] <- "grey40"
+colour_vector["Stromal_CALD1_cells"] <- "grey60"
+colour_vector["Stromal_GNG11_cells"] <- "grey70"
+
+colour_vector["Columnar_Undifferentiated"] <- "white"
+colour_vector["Columnar_Undifferentiated_Dividing"] <- colorRampPalette(c("white", "#00A087FF"))(10)[2]
+colour_vector["Columnar_Intermediate"] <- colorRampPalette(c("white", "#00A087FF"))(10)[4]
+colour_vector["Columnar_differentiated"] <- colorRampPalette(c("white", "#00A087FF"))(10)[6]
+colour_vector["Endocrine_NEUROG3"] <- colorRampPalette(c("white", "dark green"))(10)[5]
+colour_vector["Goblet"] <- colorRampPalette(c("white", "dark green"))(10)[10]
+colour_vector["Endocrine"] <- colorRampPalette(c("white", "dark green"))(10)[5]
+
+tsne.BE <- ggplot(data.frame(tSNE1 = tsne$Y[,1],
+                             tSNE2 = tsne$Y[,2],
+                             cell_type = cur_sce$cell_type_secondary)) + 
+  geom_point(aes(tSNE1, tSNE2), colour = "black", size = 2) +
+  geom_point(aes(tSNE1, tSNE2, colour = cell_type)) +
+  theme_minimal()+
+  scale_color_manual(values = colour_vector)
+tsne.BE
+
+sceasy:::convertFormat(cur_sce, from="sce", to="anndata",
+                       outFile="/home/karolno/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/BE.h5ad")
+saveRDS(cur_sce, "~/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/BE.rds")
+```
+
+
+# End Matter
+
+To finish get session info:
+
+```{r Endnote, include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE}
+sessionInfo()
+```
+
+
