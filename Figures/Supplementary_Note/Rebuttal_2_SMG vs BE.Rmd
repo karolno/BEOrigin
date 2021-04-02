@@ -1,0 +1,1017 @@
+---
+title: "Figure 4: differential testing between BE and NG"
+author: "Karol Nowicki-Osuch, based on Nils Eling's code"
+date: "`r Sys.Date()`"
+output: 
+ html_document:
+    toc: true
+    toc_float:
+      toc_collapsed: true
+    toc_depth: 3
+    number_sections: false
+    theme: paper
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Here, we will find genes that are differentially expressed between NG and BE for stem-like cells and differenitatied cells.
+
+# Read in the data
+
+```{r libraries, message=FALSE}
+library(scran)
+library(scater)
+# library(DropletUtils)
+library(openxlsx)
+library(Rtsne)
+library(pheatmap)
+library(cowplot)
+library(RColorBrewer)
+library(edgeR)
+library(ape)
+library(viridis)
+library(umap)
+library(reshape2)
+source("../Analysis/Functions/auxiliary.R")
+sce <- readRDS("~/Dropbox/Postdoc/2019-12-29_BE2020/All_corrected_sce_filtered.rds")
+
+```
+
+# Perform dimensionality reduction for NG and BE together
+
+To find genes that are cell-type specific and differentially expressed between NG and BE, we focus the analysis only on these 2 tissues. I will be using immune cells for the analysis as anchors.
+
+```{r}
+# Select tissues 
+cur_sce <- sce[,sce$include & sce$Tissue %in% c("NSCJ", "SMG", "BE")]
+
+# Deselect cell types that do not match between tissues
+# cur_sce <- cur_sce[,!(cur_sce$cell_type %in% c("Chief", "Endocrine", "Goblet", "Parietal", "Immune", "Stromal"))]
+cur_sce <- cur_sce[,!(cur_sce$cell_type %in% c("Chief", "Endocrine", "Goblet", "Parietal"))]
+
+
+# Remove genes that are not expressed
+cur_sce <- cur_sce[Matrix::rowSums(counts(cur_sce)) > 0,]
+
+
+cur_sce$cell_type[cur_sce$cell_type == "KRT5_cells"]<-"C1"
+cur_sce$cell_type[cur_sce$cell_type == "KRT5.KRT7_cells"]<-"C2"
+cur_sce$cell_type[cur_sce$cell_type == "KRT7_cells"]<-"C3"
+cur_sce$cell_type[cur_sce$cell_type == "MUC5B_cells"]<-"C4"
+
+
+# # Perform batch correction
+# sce.list <- split.sce(cur_sce, unique(cur_sce$Sample), colData.name = "Sample")
+# 
+# # Order sce objects for batch correction
+# sce.list <- sce.list[order(unlist(lapply(sce.list, ncol)), decreasing = TRUE)]
+# sce.list <- sce.list[c(which(grepl("_NG_", names(sce.list))),
+#                        which(grepl("_BE_", names(sce.list))))]
+# 
+# corrected <- batch.correction(sce.list)
+# cur_sce <- do.call("cbind", sce.list)
+n <- names(sort(table(cur_sce[["Sample"]]), decreasing = TRUE))
+n <- n[c(which(grepl("_NSCJ_", n)),
+         which(grepl("_SMG_", n)),
+         which(grepl("_BE_", n)))]
+
+# The samples are in NSCJ, NE, NG, SMG order  
+corrected <- batch.correction.single(cur_sce, batches = "Sample", m.order = n)
+
+
+
+
+
+#Identify the columns containing immune cells
+nonepi<-!(colData(cur_sce)$cell_type %in% c("Immune", "Stromal"))
+#All the subsequent images will not ahve immune and stromal cells on visualisations but they will be used for calculations
+
+set.seed(1234)
+# Alternative Dimensionality reduction
+UMAP <- umap(t(corrected))
+
+UMAP_BE_NG.tissue <- ggplot(data.frame(UMAP1 = UMAP$layout[,1],
+                                       UMAP2 = UMAP$layout[,2],
+                                       tissue = cur_sce$Tissue)[nonepi,]) +
+  geom_point(aes(UMAP1, UMAP2, colour = tissue)) +
+  scale_colour_manual(values = metadata(cur_sce)$colour_vector) +   theme(panel.grid.major = element_blank(), 
+                                                                          panel.grid.minor = element_blank(),
+                                                                          panel.background = element_blank(), 
+                                                                          axis.line = element_blank(),
+                                                                          axis.text = element_blank(),
+                                                                          axis.ticks = element_blank(),
+                                                                          legend.background = element_blank(),
+                                                                          legend.key = element_blank()
+  ) + 
+  xlab("UMAP 1")  + 
+  ylab("UMAP 2")
+UMAP_BE_NG.tissue
+
+
+# PLot umap with patient information 
+UMAP_BE_NG.patient <- ggplot(data.frame(UMAP1 = UMAP$layout[,1],
+                                        UMAP2 = UMAP$layout[,2],
+                                        patient = cur_sce$Patient)[nonepi,]) +
+  geom_point(aes(UMAP1, UMAP2, colour = patient)) +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        axis.line = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        legend.background = element_blank(),
+        legend.key = element_blank()
+  ) + 
+  xlab("UMAP 1")  + 
+  ylab("UMAP 2")
+UMAP_BE_NG.patient
+
+# PLot umap with patient information 
+UMAP_BE_NG.cell <- ggplot(data.frame(UMAP1 = UMAP$layout[,1],
+                                     UMAP2 = UMAP$layout[,2],
+                                     Cell = cur_sce$cell_type)[nonepi,]) +
+  geom_point(aes(UMAP1, UMAP2, colour = Cell)) +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        axis.line = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        legend.background = element_blank(),
+        legend.key = element_blank()
+  ) + 
+  xlab("UMAP 1")  + 
+  ylab("UMAP 2")
+UMAP_BE_NG.cell
+
+
+
+
+# TSNE
+
+TSNE <- Rtsne(t(corrected), pca = FALSE)
+#Plot tSNE with Tissue information
+jittered <- sample(ncol(cur_sce[,nonepi]))
+TSNE_BE_NG.tissue <- ggplot(data.frame(TSNE1 = TSNE$Y[,1],
+                                       TSNE2 = TSNE$Y[,2],
+                                       tissue = cur_sce$Tissue)[nonepi,][jittered,]) +
+  geom_point(aes(TSNE1, TSNE2, colour = tissue)) +
+  scale_colour_manual(values = metadata(cur_sce)$colour_vector) +   theme(panel.grid.major = element_blank(), 
+                                                                          panel.grid.minor = element_blank(),
+                                                                          panel.background = element_blank(), 
+                                                                          axis.line = element_blank(),
+                                                                          axis.text = element_blank(),
+                                                                          axis.ticks = element_blank(),
+                                                                          legend.background = element_blank(),
+                                                                          legend.key = element_blank()
+  ) + 
+  xlab("t-SNE 1")  + 
+  ylab("t-SNE 2")
+TSNE_BE_NG.tissue
+
+
+
+TSNE_BE_NG.tissue_clear <- ggplot(data.frame(TSNE1 = TSNE$Y[,1],
+                                             TSNE2 = TSNE$Y[,2],
+                                             tissue = cur_sce$Tissue)[nonepi,][jittered,]) +
+  geom_point(aes(TSNE1, TSNE2, colour = tissue)) +
+  scale_colour_manual(values = metadata(cur_sce)$colour_vector) +   theme_void() + theme(legend.position = "none")
+TSNE_BE_NG.tissue_clear
+
+
+
+# PLot tSNE with patient information 
+TSNE_BE_NG.patient <- ggplot(data.frame(TSNE1 = TSNE$Y[,1],
+                                        TSNE2 = TSNE$Y[,2],
+                                        patient = cur_sce$Patient)[nonepi,][jittered,]) +
+  geom_point(aes(TSNE1, TSNE2, colour = patient)) +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        axis.line = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        legend.background = element_blank(),
+        legend.key = element_blank()
+  ) + 
+  xlab("t-SNE 1")  + 
+  ylab("t-SNE 2")
+TSNE_BE_NG.patient
+
+# PLot tSNE with patient information 
+TSNE_BE_NG.cell <- ggplot(data.frame(TSNE1 = TSNE$Y[,1],
+                                     TSNE2 = TSNE$Y[,2],
+                                     Cell = cur_sce$cell_type)[nonepi,][jittered,]) +
+  geom_point(aes(TSNE1, TSNE2, colour = Cell)) +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        axis.line = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        legend.background = element_blank(),
+        legend.key = element_blank()
+  ) + 
+  xlab("t-SNE 1")  + 
+  ylab("t-SNE 2")
+TSNE_BE_NG.cell
+
+ggsave("~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Rebuttal/BE_NSCJ_SMG_tissue.pdf", TSNE_BE_NG.tissue, width = 8, height = 7, useDingbats = FALSE)
+ggsave("~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Rebuttal/BE_NSCJ_SMG_cells.pdf", TSNE_BE_NG.cell, width = 8, height = 7, useDingbats = FALSE)
+
+
+
+```
+
+# Differential expression testing between cell types BE vs SMG
+
+Here, we perform DE between progenitor and differentiated cell types and across tissues.
+
+```{r}
+# List to save result
+
+out <- list()
+
+# DE within BE tissue
+sce_test <- cur_sce[,cur_sce$Tissue == "BE" & cur_sce$cell_type_secondary %in% c("Columnar_Undifferentiated", "Columnar_differentiated")]
+BE_Undiff_vs_Diff <- DE.edgeR(sce_test, conditions = sce_test$cell_type,
+                              covariate = sce_test$Patient, lfc = 0.5,
+                              FDR = 1)
+
+BE_Undiff_vs_Diff.out <- rbind(BE_Undiff_vs_Diff$Columnar_Undifferentiated,
+                               BE_Undiff_vs_Diff$Columnar_differentiated[
+                                 seq(nrow(BE_Undiff_vs_Diff$Columnar_differentiated), 1),])
+
+BE_Undiff_vs_Diff.out$ID <- rownames(BE_Undiff_vs_Diff.out)
+
+BE_Undiff_vs_Diff.out$specificity <- NA
+BE_Undiff_vs_Diff.out$specificity[BE_Undiff_vs_Diff.out$logFC < 0 & BE_Undiff_vs_Diff.out$FDR <= 0.1] <- "Columnar_Undifferentiated"
+BE_Undiff_vs_Diff.out$specificity[BE_Undiff_vs_Diff.out$logFC > 0 & BE_Undiff_vs_Diff.out$FDR <= 0.1] <- "Columnar_differentiated"
+
+out$BE_Undiff_vs_Diff <- BE_Undiff_vs_Diff.out
+
+# DE within undiff cells tissue
+sce_test <- cur_sce[,cur_sce$cell_type_secondary %in% c("Oncocytes_MUC5B_Low", "Mucous_MUC5B_High", "Duct_Intercalating", "Columnar_Undifferentiated")]
+Undiff_BE_vs_SMG <- DE.edgeR(sce_test, conditions = sce_test$Tissue,
+                             covariate = sce_test$Patient, lfc = 0.5,
+                             FDR = 1)
+
+Undiff_BE_vs_SMG.out <- rbind(Undiff_BE_vs_SMG$SMG,
+                              Undiff_BE_vs_SMG$BE[
+                                seq(nrow(Undiff_BE_vs_SMG$BE), 1),])
+
+Undiff_BE_vs_SMG.out$ID <- rownames(Undiff_BE_vs_SMG.out)
+
+Undiff_BE_vs_SMG.out$specificity <- NA
+Undiff_BE_vs_SMG.out$specificity[Undiff_BE_vs_SMG.out$logFC < 0 & Undiff_BE_vs_SMG.out$FDR <= 0.1] <- "SMG"
+Undiff_BE_vs_SMG.out$specificity[Undiff_BE_vs_SMG.out$logFC > 0 & Undiff_BE_vs_SMG.out$FDR <= 0.1] <- "BE"
+
+out$Undiff_BE_vs_SMG <- Undiff_BE_vs_SMG.out
+
+# DE within diff cells tissue
+sce_test <- cur_sce[,cur_sce$cell_type_secondary %in% c("Oncocytes_MUC5B_Low", "Mucous_MUC5B_High", "Duct_Intercalating", "Columnar_differentiated")]
+diff_BE_vs_SMG <- DE.edgeR(sce_test, conditions = sce_test$Tissue,
+                           covariate = sce_test$Patient, lfc = 0.5,
+                           FDR = 1)
+
+diff_BE_vs_SMG.out <- rbind(diff_BE_vs_SMG$SMG,
+                            diff_BE_vs_SMG$BE[
+                              seq(nrow(diff_BE_vs_SMG$BE), 1),])
+
+diff_BE_vs_SMG.out$ID <- rownames(diff_BE_vs_SMG.out)
+
+diff_BE_vs_SMG.out$specificity <- NA
+diff_BE_vs_SMG.out$specificity[diff_BE_vs_SMG.out$logFC < 0 & diff_BE_vs_SMG.out$FDR <= 0.1] <- "SMG"
+diff_BE_vs_SMG.out$specificity[diff_BE_vs_SMG.out$logFC > 0 & diff_BE_vs_SMG.out$FDR <= 0.1] <- "BE"
+
+out$diff_BE_vs_SMG <- diff_BE_vs_SMG.out
+
+# Normalize sce
+cur_sce <- computeSumFactors(cur_sce, clusters=paste(cur_sce$Tissue, cur_sce$cell_type_secondary, sep = "_"))
+cur_sce <- logNormCounts(cur_sce, log = TRUE)
+
+# Visualize genes 
+
+# differentiated cells
+cur_tab <- out$diff_BE_vs_SMG
+cur_tab <- cur_tab[!is.na(cur_tab$specificity),]
+cur_tab <- rbind(head(cur_tab, 100), tail(cur_tab, 100))
+for_vis <- cur_sce[,cur_sce$cell_type_secondary %in% c("Oncocytes_MUC5B_Low", "Mucous_MUC5B_High", "Duct_Intercalating", "Columnar_Undifferentiated", "Columnar_differentiated")]
+cur_mat <- logcounts(for_vis)[rownames(cur_tab), ]
+colnames(cur_mat) <- paste(for_vis$Barcode, for_vis$Patient)
+pheatmap(cur_mat, 
+         cluster_rows = FALSE, 
+         annotation_col = data.frame(row.names = colnames(cur_mat),
+                                     cell_type = for_vis$cell_type_secondary,
+                                     tissue = for_vis$Tissue,
+                                     patient = for_vis$Patient),
+         show_colnames = FALSE, show_rownames = FALSE, scale = "row",
+         color = colorRampPalette(c("dark blue", "blue", "white", "red", "dark red"))(100))
+
+
+# Undifferentiated cells
+cur_tab <- out$Undiff_BE_vs_SMG
+cur_tab <- cur_tab[!is.na(cur_tab$specificity),]
+cur_tab <- rbind(head(cur_tab, 100), tail(cur_tab, 100))
+for_vis <- cur_sce[,cur_sce$cell_type_secondary %in% c("Oncocytes_MUC5B_Low", "Mucous_MUC5B_High", "Duct_Intercalating", "Columnar_Undifferentiated", "Columnar_differentiated")]
+cur_mat <- logcounts(for_vis)[rownames(cur_tab), ]
+colnames(cur_mat) <- paste(for_vis$Barcode, for_vis$Patient)
+pheatmap(cur_mat, 
+         cluster_rows = FALSE, 
+         annotation_col = data.frame(row.names = colnames(cur_mat),
+                                     cell_type = for_vis$cell_type_secondary,
+                                     tissue = for_vis$Tissue,
+                                     patient = for_vis$Patient),
+         show_colnames = FALSE, show_rownames = FALSE, scale = "row",
+         color = colorRampPalette(c("dark blue", "blue", "white", "red", "dark red"))(100))
+
+# BE
+cur_tab <- out$BE_Undiff_vs_Diff
+cur_tab <- cur_tab[!is.na(cur_tab$specificity),]
+cur_tab <- rbind(head(cur_tab, 100), tail(cur_tab, 100))
+for_vis <- cur_sce[,cur_sce$Tissue == "BE" & cur_sce$cell_type_secondary %in% c("Columnar_Undifferentiated", "Columnar_differentiated") ]
+cur_mat <- logcounts(for_vis)[rownames(cur_tab), ]
+colnames(cur_mat) <- paste(for_vis$Barcode, for_vis$Patient)
+pheatmap(cur_mat, 
+         cluster_rows = FALSE, 
+         annotation_col = data.frame(row.names = colnames(cur_mat),
+                                     cell_type = for_vis$cell_type_secondary,
+                                     tissue = for_vis$Tissue,
+                                     patient = for_vis$Patient),
+         show_colnames = FALSE, show_rownames = FALSE, scale = "row",
+         color = colorRampPalette(c("dark blue", "blue", "white", "red", "dark red"))(100))
+
+
+# Save results
+write.xlsx(out, file = "~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Supplemental_tables/Table_RR1.xlsx")
+```
+
+
+```{r}
+# Find overlap between Undiff and Diff specific genes and tissue comparisons
+# We save the comparison between the tissues
+# We then remove unecessary columns and add the comparison between undiff and diff
+
+# List to save results
+out_spec <- list()
+
+# Undifferentiated
+
+# BE specific
+cur_1 <- out$BE_Undiff_vs_Diff[out$BE_Undiff_vs_Diff$specificity == "Columnar_Undifferentiated" &
+                                 !is.na(out$BE_Undiff_vs_Diff$specificity),]
+cur_2 <- out$Undiff_BE_vs_SMG[out$Undiff_BE_vs_SMG$specificity == "BE" &
+                                !is.na(out$Undiff_BE_vs_SMG$specificity),]
+shared.genes <- intersect(rownames(cur_1), rownames(cur_2))
+BE_undiff <- cbind(out$BE_Undiff_vs_Diff[shared.genes,], out$Undiff_BE_vs_SMG[shared.genes,])
+BE_undiff <- BE_undiff[,c(1,5,9,13,14,15)]
+
+colnames(BE_undiff)[1:4] <- c(paste(colnames(BE_undiff)[1:2], "Undiff_vs_Diff", sep = "."),
+                              paste(colnames(BE_undiff)[3:4], "BE_vs_SMG", sep = "."))
+
+# Order table
+BE_undiff <- BE_undiff[order(rowMeans(BE_undiff[,c(2,4)]), decreasing = FALSE),]
+out_spec$BE_undiff_specific <- BE_undiff
+
+
+# BE undiff
+for_vis <- cur_sce[,cur_sce$cell_type_secondary %in% c("Oncocytes_MUC5B_Low", "Mucous_MUC5B_High", "Duct_Intercalating", "Columnar_Undifferentiated", "Columnar_differentiated")]
+cur_mat <- logcounts(for_vis)[out_spec$BE_undiff_specific$ID,]
+colnames(cur_mat) <- paste(for_vis$Barcode, for_vis$Patient)
+cur_dat <- data.frame(row.names = colnames(cur_mat),
+                      cell_type = for_vis$cell_type_secondary,
+                      tissue = for_vis$Tissue,
+                      patient = for_vis$Patient)
+pheatmap(cur_mat[,order(cur_dat$cell_type, cur_dat$tissue)], 
+         cluster_rows = FALSE, cluster_cols = FALSE,
+         annotation_col = cur_dat[order(cur_dat$cell_type, cur_dat$tissue),],
+         show_colnames = FALSE, show_rownames = FALSE, 
+         color = colorRampPalette(c("dark blue", "blue", "white", "red", "dark red"))(100))
+pheatmap(cur_mat[,order(cur_dat$cell_type, cur_dat$tissue)], 
+         cluster_rows = FALSE, cluster_cols = FALSE,
+         scale = "row",
+         annotation_col = cur_dat[order(cur_dat$cell_type, cur_dat$tissue),],
+         show_colnames = FALSE, show_rownames = FALSE, 
+         color = colorRampPalette(c("dark blue", "blue", "white", "red", "dark red"))(100))
+
+
+# Differentiated
+
+# BE specific
+cur_1 <- out$BE_Undiff_vs_Diff[out$BE_Undiff_vs_Diff$specificity == "Columnar_differentiated" &
+                                 !is.na(out$BE_Undiff_vs_Diff$specificity),]
+cur_2 <- out$diff_BE_vs_SMG[out$diff_BE_vs_SMG$specificity == "BE" &
+                              !is.na(out$diff_BE_vs_SMG$specificity),]
+shared.genes <- intersect(rownames(cur_1), rownames(cur_2))
+BE_diff <- cbind(out$BE_Undiff_vs_Diff[shared.genes,], out$diff_BE_vs_SMG[shared.genes,])
+BE_diff <- BE_diff[,c(1,5,9,13,14,15)]
+
+colnames(BE_diff)[1:4] <- c(paste(colnames(BE_diff)[1:2], "Undiff_vs_Diff", sep = "."),
+                            paste(colnames(BE_diff)[3:4], "BE_vs_SMG", sep = "."))
+
+# Order table
+BE_diff <- BE_diff[order(rowMeans(BE_diff[,c(2,4)]), decreasing = FALSE),]
+out_spec$BE_diff_specific <- BE_diff
+
+
+# BE undiff
+for_vis <- cur_sce[,cur_sce$cell_type_secondary %in% c("Oncocytes_MUC5B_Low", "Mucous_MUC5B_High", "Duct_Intercalating", "Columnar_Undifferentiated", "Columnar_differentiated")]
+cur_mat <- logcounts(for_vis)[out_spec$BE_diff_specific$ID,]
+colnames(cur_mat) <- paste(for_vis$Barcode, for_vis$Patient)
+cur_dat <- data.frame(row.names = colnames(cur_mat),
+                      cell_type = for_vis$cell_type_secondary,
+                      tissue = for_vis$Tissue,
+                      patient = for_vis$Patient)
+pheatmap(cur_mat[,order(cur_dat$cell_type, cur_dat$tissue)], 
+         cluster_rows = FALSE, cluster_cols = FALSE,
+         annotation_col = cur_dat[order(cur_dat$cell_type, cur_dat$tissue),],
+         show_colnames = FALSE, show_rownames = FALSE, 
+         color = colorRampPalette(c("dark blue", "blue", "white", "red", "dark red"))(100))
+pheatmap(cur_mat[,order(cur_dat$cell_type, cur_dat$tissue)], 
+         cluster_rows = FALSE, cluster_cols = FALSE,
+         scale = "row",
+         annotation_col = cur_dat[order(cur_dat$cell_type, cur_dat$tissue),],
+         show_colnames = FALSE, show_rownames = FALSE, 
+         color = colorRampPalette(c("dark blue", "blue", "white", "red", "dark red"))(100))
+
+
+
+# Save results
+write.xlsx(out_spec, file = "~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Supplemental_tables/Table_RR2.xlsx")
+```
+
+# Differential expression testing between cell types BE vs Novel cell types
+
+Here, we perform DE between progenitor and differentiated cell types and across tissues.
+
+```{r}
+# List to save result
+
+out <- list()
+
+# DE within BE tissue
+sce_test <- cur_sce[,cur_sce$Tissue == "BE" & cur_sce$cell_type_secondary %in% c("Columnar_Undifferentiated", "Columnar_differentiated")]
+BE_Undiff_vs_Diff <- DE.edgeR(sce_test, conditions = sce_test$cell_type,
+                              covariate = sce_test$Patient, lfc = 0.5,
+                              FDR = 1)
+
+BE_Undiff_vs_Diff.out <- rbind(BE_Undiff_vs_Diff$Columnar_Undifferentiated,
+                               BE_Undiff_vs_Diff$Columnar_differentiated[
+                                 seq(nrow(BE_Undiff_vs_Diff$Columnar_differentiated), 1),])
+
+BE_Undiff_vs_Diff.out$ID <- rownames(BE_Undiff_vs_Diff.out)
+
+BE_Undiff_vs_Diff.out$specificity <- NA
+BE_Undiff_vs_Diff.out$specificity[BE_Undiff_vs_Diff.out$logFC < 0 & BE_Undiff_vs_Diff.out$FDR <= 0.1] <- "Columnar_Undifferentiated"
+BE_Undiff_vs_Diff.out$specificity[BE_Undiff_vs_Diff.out$logFC > 0 & BE_Undiff_vs_Diff.out$FDR <= 0.1] <- "Columnar_differentiated"
+
+out$BE_Undiff_vs_Diff <- BE_Undiff_vs_Diff.out
+
+# DE within undiff cells tissue
+sce_test <- cur_sce[,cur_sce$cell_type_secondary %in% c("KRT7_cells", "KRT5.KRT7_cells", "MUC5B_cells", "Columnar_Undifferentiated")]
+Undiff_BE_vs_Novel <- DE.edgeR(sce_test, conditions = sce_test$Tissue,
+                               covariate = sce_test$Patient, lfc = 0.5,
+                               FDR = 1)
+
+Undiff_BE_vs_Novel.out <- rbind(Undiff_BE_vs_Novel$NSCJ,
+                                Undiff_BE_vs_Novel$BE[
+                                  seq(nrow(Undiff_BE_vs_Novel$BE), 1),])
+
+Undiff_BE_vs_Novel.out$ID <- rownames(Undiff_BE_vs_Novel.out)
+
+Undiff_BE_vs_Novel.out$specificity <- NA
+Undiff_BE_vs_Novel.out$specificity[Undiff_BE_vs_Novel.out$logFC < 0 & Undiff_BE_vs_Novel.out$FDR <= 0.1] <- "Novel"
+Undiff_BE_vs_Novel.out$specificity[Undiff_BE_vs_Novel.out$logFC > 0 & Undiff_BE_vs_Novel.out$FDR <= 0.1] <- "BE"
+
+out$Undiff_BE_vs_Novel <- Undiff_BE_vs_Novel.out
+
+# DE within diff cells tissue
+sce_test <- cur_sce[,cur_sce$cell_type_secondary %in% c("KRT7_cells", "KRT5.KRT7_cells", "MUC5B_cells", "Columnar_differentiated")]
+diff_BE_vs_Novel <- DE.edgeR(sce_test, conditions = sce_test$Tissue,
+                             covariate = sce_test$Patient, lfc = 0.5,
+                             FDR = 1)
+
+diff_BE_vs_Novel.out <- rbind(diff_BE_vs_Novel$NSCJ,
+                              diff_BE_vs_Novel$BE[
+                                seq(nrow(diff_BE_vs_Novel$BE), 1),])
+
+diff_BE_vs_Novel.out$ID <- rownames(diff_BE_vs_Novel.out)
+
+diff_BE_vs_Novel.out$specificity <- NA
+diff_BE_vs_Novel.out$specificity[diff_BE_vs_Novel.out$logFC < 0 & diff_BE_vs_Novel.out$FDR <= 0.1] <- "Novel"
+diff_BE_vs_Novel.out$specificity[diff_BE_vs_Novel.out$logFC > 0 & diff_BE_vs_Novel.out$FDR <= 0.1] <- "BE"
+
+out$diff_BE_vs_Novel <- diff_BE_vs_Novel.out
+
+# Normalize sce
+cur_sce <- computeSumFactors(cur_sce, clusters=paste(cur_sce$Tissue, cur_sce$cell_type_secondary, sep = "_"))
+cur_sce <- logNormCounts(cur_sce, log = TRUE)
+
+# Visualize genes 
+
+# differentiated cells
+cur_tab <- out$diff_BE_vs_Novel
+cur_tab <- cur_tab[!is.na(cur_tab$specificity),]
+cur_tab <- rbind(head(cur_tab, 100), tail(cur_tab, 100))
+for_vis <- cur_sce[,cur_sce$cell_type_secondary %in% c("KRT7_cells", "KRT5.KRT7_cells", "MUC5B_cells", "Columnar_Undifferentiated", "Columnar_differentiated")]
+cur_mat <- logcounts(for_vis)[rownames(cur_tab), ]
+colnames(cur_mat) <- paste(for_vis$Barcode, for_vis$Patient)
+pheatmap(cur_mat, 
+         cluster_rows = FALSE, 
+         annotation_col = data.frame(row.names = colnames(cur_mat),
+                                     cell_type = for_vis$cell_type_secondary,
+                                     tissue = for_vis$Tissue,
+                                     patient = for_vis$Patient),
+         show_colnames = FALSE, show_rownames = FALSE, scale = "row",
+         color = colorRampPalette(c("dark blue", "blue", "white", "red", "dark red"))(100))
+
+
+# Undifferentiated cells
+cur_tab <- out$Undiff_BE_vs_Novel
+cur_tab <- cur_tab[!is.na(cur_tab$specificity),]
+cur_tab <- rbind(head(cur_tab, 100), tail(cur_tab, 100))
+for_vis <- cur_sce[,cur_sce$cell_type_secondary %in% c("KRT7_cells", "KRT5.KRT7_cells", "MUC5B_cells", "Columnar_Undifferentiated", "Columnar_differentiated")]
+cur_mat <- logcounts(for_vis)[rownames(cur_tab), ]
+colnames(cur_mat) <- paste(for_vis$Barcode, for_vis$Patient)
+pheatmap(cur_mat, 
+         cluster_rows = FALSE, 
+         annotation_col = data.frame(row.names = colnames(cur_mat),
+                                     cell_type = for_vis$cell_type_secondary,
+                                     tissue = for_vis$Tissue,
+                                     patient = for_vis$Patient),
+         show_colnames = FALSE, show_rownames = FALSE, scale = "row",
+         color = colorRampPalette(c("dark blue", "blue", "white", "red", "dark red"))(100))
+
+# BE
+cur_tab <- out$BE_Undiff_vs_Diff
+cur_tab <- cur_tab[!is.na(cur_tab$specificity),]
+cur_tab <- rbind(head(cur_tab, 100), tail(cur_tab, 100))
+for_vis <- cur_sce[,cur_sce$Tissue == "BE" & cur_sce$cell_type_secondary %in% c("Columnar_Undifferentiated", "Columnar_differentiated") ]
+cur_mat <- logcounts(for_vis)[rownames(cur_tab), ]
+colnames(cur_mat) <- paste(for_vis$Barcode, for_vis$Patient)
+pheatmap(cur_mat, 
+         cluster_rows = FALSE, 
+         annotation_col = data.frame(row.names = colnames(cur_mat),
+                                     cell_type = for_vis$cell_type_secondary,
+                                     tissue = for_vis$Tissue,
+                                     patient = for_vis$Patient),
+         show_colnames = FALSE, show_rownames = FALSE, scale = "row",
+         color = colorRampPalette(c("dark blue", "blue", "white", "red", "dark red"))(100))
+
+
+# Save results
+write.xlsx(out, file = "~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Supplemental_tables/Table_RR3.xlsx")
+```
+
+
+```{r}
+# Find overlap between Undiff and Diff specific genes and tissue comparisons
+# We save the comparison between the tissues
+# We then remove unecessary columns and add the comparison between undiff and diff
+
+# List to save results
+out_spec <- list()
+
+# Undifferentiated
+
+# BE specific
+cur_1 <- out$BE_Undiff_vs_Diff[out$BE_Undiff_vs_Diff$specificity == "Columnar_Undifferentiated" &
+                                 !is.na(out$BE_Undiff_vs_Diff$specificity),]
+cur_2 <- out$Undiff_BE_vs_Novel[out$Undiff_BE_vs_Novel$specificity == "BE" &
+                                  !is.na(out$Undiff_BE_vs_Novel$specificity),]
+shared.genes <- intersect(rownames(cur_1), rownames(cur_2))
+BE_undiff <- cbind(out$BE_Undiff_vs_Diff[shared.genes,], out$Undiff_BE_vs_Novel[shared.genes,])
+BE_undiff <- BE_undiff[,c(1,5,9,13,14,15)]
+
+colnames(BE_undiff)[1:4] <- c(paste(colnames(BE_undiff)[1:2], "Undiff_vs_Diff", sep = "."),
+                              paste(colnames(BE_undiff)[3:4], "BE_vs_Novel", sep = "."))
+
+# Order table
+BE_undiff <- BE_undiff[order(rowMeans(BE_undiff[,c(2,4)]), decreasing = FALSE),]
+out_spec$BE_undiff_specific <- BE_undiff
+
+
+# BE undiff
+for_vis <- cur_sce[,cur_sce$cell_type_secondary %in% c("KRT7_cells", "KRT5.KRT7_cells", "MUC5B_cells", "Columnar_Undifferentiated", "Columnar_differentiated")]
+cur_mat <- logcounts(for_vis)[out_spec$BE_undiff_specific$ID,]
+colnames(cur_mat) <- paste(for_vis$Barcode, for_vis$Patient)
+cur_dat <- data.frame(row.names = colnames(cur_mat),
+                      cell_type = for_vis$cell_type_secondary,
+                      tissue = for_vis$Tissue,
+                      patient = for_vis$Patient)
+pheatmap(cur_mat[,order(cur_dat$cell_type, cur_dat$tissue)], 
+         cluster_rows = FALSE, cluster_cols = FALSE,
+         annotation_col = cur_dat[order(cur_dat$cell_type, cur_dat$tissue),],
+         show_colnames = FALSE, show_rownames = FALSE, 
+         color = colorRampPalette(c("dark blue", "blue", "white", "red", "dark red"))(100))
+pheatmap(cur_mat[,order(cur_dat$cell_type, cur_dat$tissue)], 
+         cluster_rows = FALSE, cluster_cols = FALSE,
+         scale = "row",
+         annotation_col = cur_dat[order(cur_dat$cell_type, cur_dat$tissue),],
+         show_colnames = FALSE, show_rownames = FALSE, 
+         color = colorRampPalette(c("dark blue", "blue", "white", "red", "dark red"))(100))
+
+
+# Differentiated
+
+# BE specific
+cur_1 <- out$BE_Undiff_vs_Diff[out$BE_Undiff_vs_Diff$specificity == "Columnar_differentiated" &
+                                 !is.na(out$BE_Undiff_vs_Diff$specificity),]
+cur_2 <- out$diff_BE_vs_Novel[out$diff_BE_vs_Novel$specificity == "BE" &
+                                !is.na(out$diff_BE_vs_Novel$specificity),]
+shared.genes <- intersect(rownames(cur_1), rownames(cur_2))
+BE_diff <- cbind(out$BE_Undiff_vs_Diff[shared.genes,], out$diff_BE_vs_Novel[shared.genes,])
+BE_diff <- BE_diff[,c(1,5,9,13,14,15)]
+
+colnames(BE_diff)[1:4] <- c(paste(colnames(BE_diff)[1:2], "Undiff_vs_Diff", sep = "."),
+                            paste(colnames(BE_diff)[3:4], "BE_vs_Novel", sep = "."))
+
+# Order table
+BE_diff <- BE_diff[order(rowMeans(BE_diff[,c(2,4)]), decreasing = FALSE),]
+out_spec$BE_diff_specific <- BE_diff
+
+
+# BE undiff
+for_vis <- cur_sce[,cur_sce$cell_type_secondary %in% c("KRT7_cells", "KRT5.KRT7_cells", "MUC5B_cells", "Columnar_Undifferentiated", "Columnar_differentiated")]
+cur_mat <- logcounts(for_vis)[out_spec$BE_diff_specific$ID,]
+colnames(cur_mat) <- paste(for_vis$Barcode, for_vis$Patient)
+cur_dat <- data.frame(row.names = colnames(cur_mat),
+                      cell_type = for_vis$cell_type_secondary,
+                      tissue = for_vis$Tissue,
+                      patient = for_vis$Patient)
+pheatmap(cur_mat[,order(cur_dat$cell_type, cur_dat$tissue)], 
+         cluster_rows = FALSE, cluster_cols = FALSE,
+         annotation_col = cur_dat[order(cur_dat$cell_type, cur_dat$tissue),],
+         show_colnames = FALSE, show_rownames = FALSE, 
+         color = colorRampPalette(c("dark blue", "blue", "white", "red", "dark red"))(100))
+pheatmap(cur_mat[,order(cur_dat$cell_type, cur_dat$tissue)], 
+         cluster_rows = FALSE, cluster_cols = FALSE,
+         scale = "row",
+         annotation_col = cur_dat[order(cur_dat$cell_type, cur_dat$tissue),],
+         show_colnames = FALSE, show_rownames = FALSE, 
+         color = colorRampPalette(c("dark blue", "blue", "white", "red", "dark red"))(100))
+
+
+
+# Save results
+write.xlsx(out_spec, file = "~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Supplemental_tables/Table_RR4.xlsx")
+```
+
+# Run GSEA and LISA
+
+I then run GSEA with rank lists and with C3 TF lists. I also run Lisa (DOI:10.1186/s13059-020-1934-6) as we don't pay for IPA anymore.
+
+## Undiff BE vs SMG
+
+```{r}
+files.dir<-"/home/karolno/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Rebuttal/GSEA/"
+#Read data
+GSEA.dir<-"/home/karolno/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Rebuttal/GSEA/undiff_BEvSGM.GseaPreranked.1617158960434//"
+
+all.data<-read.delim(file=paste0(GSEA.dir,"gsea_report_for_na_pos_1617158960434.xls"))
+all.data<-rbind(all.data,read.delim(file=paste0(GSEA.dir,"/gsea_report_for_na_neg_1617158960434.xls")))
+
+
+all.data$test<-"Other"
+all.data$test[lapply(all.data$GS.br..follow.link.to.MSigDB, function(x) grep(pattern = "MYC", x))>0]<-"MYC"
+# all.data$test[lapply(all.data$GS.br..follow.link.to.MSigDB, function(x) grep(pattern = "HNF4", x))>0]<-"HNF4A"
+
+# all.data$test[is.na(all.data$test)]<-FALSE
+all.data<-all.data[rev(order(all.data$NES)),]
+
+all.data$n<-1:nrow(all.data)
+all.data<-all.data[rev(order(all.data$test)),]
+
+ggplot(all.data, aes(x= NES, y= FDR.q.val , color = test)) + geom_point()+scale_color_manual(values = c("#E41A1C", "grey" ))+theme_bw()
+
+
+p<-ggplot(all.data, aes(y= NES, x= n, color = test))+geom_point()+scale_color_manual(values = c("#E41A1C", "grey" ))+theme_bw()
+
+
+p
+ggsave(plot = p, file = paste0(files.dir, "./undiff_BEvSGM.pdf"),  width = 7, height = 6, useDingbats=FALSE)
+
+```
+
+## Diff BE vs SMG
+
+```{r}
+files.dir<-"/home/karolno/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Rebuttal/GSEA/"
+#Read data
+GSEA.dir<-"/home/karolno/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Rebuttal/GSEA/diffBEsSMG_TFF.GseaPreranked.1617063074490//"
+
+all.data<-read.delim(file=paste0(GSEA.dir,"gsea_report_for_na_pos_1617063074490.xls"))
+all.data<-rbind(all.data,read.delim(file=paste0(GSEA.dir,"/gsea_report_for_na_neg_1617063074490.xls")))
+
+
+all.data$test<-"Other"
+# all.data$test[lapply(all.data$GS.br..follow.link.to.MSigDB, function(x) grep(pattern = "MYC", x))>0]<-"MYC"
+all.data$test[lapply(all.data$GS.br..follow.link.to.MSigDB, function(x) grep(pattern = "HNF4", x))>0]<-"HNF4A"
+
+# all.data$test[is.na(all.data$test)]<-FALSE
+all.data<-all.data[rev(order(all.data$NES)),]
+
+all.data$n<-1:nrow(all.data)
+all.data<-all.data[rev(order(all.data$test)),]
+
+ggplot(all.data, aes(x= NES, y= FDR.q.val , color = test)) + geom_point()+scale_color_manual(values = c("#E41A1C", "grey" ))+theme_bw()
+
+
+p<-ggplot(all.data, aes(y= NES, x= n, color = test))+geom_point()+scale_color_manual(values = c("#E41A1C", "grey" ))+theme_bw()
+
+
+p
+ggsave(plot = p, file = paste0(files.dir, "./Diff_BEvSGM.pdf"),  width = 7, height = 6, useDingbats=FALSE)
+
+```
+
+
+## Undiff BE vs Novel
+
+```{r}
+files.dir<-"/home/karolno/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Rebuttal/GSEA/"
+#Read data
+GSEA.dir<-"/home/karolno/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Rebuttal/GSEA/undiff_BEvNovel.GseaPreranked.1617158969173//"
+
+all.data<-read.delim(file=paste0(GSEA.dir,"gsea_report_for_na_pos_1617158969173.xls"))
+all.data<-rbind(all.data,read.delim(file=paste0(GSEA.dir,"/gsea_report_for_na_neg_1617158969173.xls")))
+
+
+all.data$test<-"Other"
+all.data$test[lapply(all.data$GS.br..follow.link.to.MSigDB, function(x) grep(pattern = "MYC", x))>0]<-"MYC"
+# all.data$test[lapply(all.data$GS.br..follow.link.to.MSigDB, function(x) grep(pattern = "HNF4", x))>0]<-"HNF4A"
+
+# all.data$test[is.na(all.data$test)]<-FALSE
+all.data<-all.data[rev(order(all.data$NES)),]
+
+all.data$n<-1:nrow(all.data)
+all.data<-all.data[rev(order(all.data$test)),]
+
+ggplot(all.data, aes(x= NES, y= FDR.q.val , color = test)) + geom_point()+scale_color_manual(values = c("#E41A1C", "grey" ))+theme_bw()
+
+
+p<-ggplot(all.data, aes(y= NES, x= n, color = test))+geom_point()+scale_color_manual(values = c("#E41A1C", "grey" ))+theme_bw()
+
+
+p
+ggsave(plot = p, file = paste0(files.dir, "./Undiff_BEvNovel.pdf"),  width = 7, height = 6, useDingbats=FALSE)
+
+```
+
+
+## Diff BE vs Novel
+
+```{r}
+files.dir<-"/home/karolno/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Rebuttal/GSEA/"
+#Read data
+GSEA.dir<-"/home/karolno/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Rebuttal/GSEA/diffBEvNovel_TFF.GseaPreranked.1617063253938/"
+
+all.data<-read.delim(file=paste0(GSEA.dir,"gsea_report_for_na_pos_1617063253938.xls"))
+all.data<-rbind(all.data,read.delim(file=paste0(GSEA.dir,"/gsea_report_for_na_neg_1617063253938.xls")))
+
+
+all.data$test<-"Other"
+# all.data$test[lapply(all.data$GS.br..follow.link.to.MSigDB, function(x) grep(pattern = "MYC", x))>0]<-"MYC"
+all.data$test[lapply(all.data$GS.br..follow.link.to.MSigDB, function(x) grep(pattern = "HNF4", x))>0]<-"HNF4A"
+
+# all.data$test[is.na(all.data$test)]<-FALSE
+all.data<-all.data[rev(order(all.data$NES)),]
+
+all.data$n<-1:nrow(all.data)
+all.data<-all.data[rev(order(all.data$test)),]
+
+ggplot(all.data, aes(x= NES, y= FDR.q.val , color = test)) + geom_point()+scale_color_manual(values = c("#E41A1C", "grey" ))+theme_bw()
+
+
+p<-ggplot(all.data, aes(y= NES, x= n, color = test))+geom_point()+scale_color_manual(values = c("#E41A1C", "grey" ))+theme_bw()
+
+
+p
+ggsave(plot = p, file = paste0(files.dir, "./Diff_BEvNovel.pdf"),  width = 7, height = 6, useDingbats=FALSE)
+
+```
+
+# Plot Lisa output
+
+## Undiff BE vs SMG
+
+```{r}
+data1<-read.csv("/home/karolno/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Rebuttal/LISA/undiff_BEvSMG.csv", stringsAsFactors = FALSE)
+data1<-data1[1:10,]
+data1$X1st.Sample.p.value<--log10(data1$X1st.Sample.p.value)
+data1$Transcription.Factor<-factor(data1$Transcription.Factor, levels = data1$Transcription.Factor)
+
+p<-ggplot(data=data1, aes(x=Transcription.Factor, y=X1st.Sample.p.value,  label = rank))+
+  geom_bar(stat = "identity" , color = "black", fill = "black", width = 0.5)+coord_flip()           
+
+p<-p  + scale_x_discrete(limits=rev(data1$Transcription.Factor))
+p<-p+ylab(label = "-Log10(p-value)") + xlab(label = "Transcription Factor")+ theme_bw() + ggtitle(label = "Undiff BE vs SMG")
+
+p
+
+ggsave(plot = p, file = paste0(files.dir, "../Lisa_Undiff_BEvSMG.pdf"),  width = 8, height = 10, useDingbats=FALSE)
+
+```
+
+## Diff BE vs SMG
+
+```{r}
+data1<-read.csv("/home/karolno/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Rebuttal/LISA/diff_BEvSMG.csv", stringsAsFactors = FALSE)
+data1<-data1[1:10,]
+data1$X1st.Sample.p.value<--log10(data1$X1st.Sample.p.value)
+data1$Transcription.Factor<-factor(data1$Transcription.Factor, levels = data1$Transcription.Factor)
+
+p<-ggplot(data=data1, aes(x=Transcription.Factor, y=X1st.Sample.p.value,  label = rank))+
+  geom_bar(stat = "identity" , color = "black", fill = "black", width = 0.5)+coord_flip()           
+
+p<-p  + scale_x_discrete(limits=rev(data1$Transcription.Factor))
+p<-p+ylab(label = "-Log10(p-value)") + xlab(label = "Transcription Factor")+ theme_bw() + ggtitle(label = "Diff BE vs SMG")
+
+p
+
+ggsave(plot = p, file = paste0(files.dir, "../Lisa_Diff_BEvSMG.pdf"),  width = 8, height = 10, useDingbats=FALSE)
+
+
+```
+
+## Undiff BE vs Novel
+
+```{r}
+data1<-read.csv("/home/karolno/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Rebuttal/LISA/undiff_BEvNovel.csv", stringsAsFactors = FALSE)
+data1<-data1[1:10,]
+data1$X1st.Sample.p.value<--log10(data1$X1st.Sample.p.value)
+data1$Transcription.Factor<-factor(data1$Transcription.Factor, levels = data1$Transcription.Factor)
+
+p<-ggplot(data=data1, aes(x=Transcription.Factor, y=X1st.Sample.p.value,  label = rank))+
+  geom_bar(stat = "identity" , color = "black", fill = "black", width = 0.5)+coord_flip()           
+
+p<-p  + scale_x_discrete(limits=rev(data1$Transcription.Factor))
+p<-p+ylab(label = "-Log10(p-value)") + xlab(label = "Transcription Factor")+ theme_bw() + ggtitle(label = "Undiff BE vs Novel")
+
+p
+
+ggsave(plot = p, file = paste0(files.dir, "../Lisa_Undiff_BEvNovel.pdf"),  width = 8, height = 10, useDingbats=FALSE)
+
+
+```
+
+## Diff BE vs Novel
+
+```{r}
+data1<-read.csv("/home/karolno/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Rebuttal/LISA/diff_BEvNovel.csv", stringsAsFactors = FALSE)
+data1<-data1[1:10,]
+data1$X1st.Sample.p.value<--log10(data1$X1st.Sample.p.value)
+data1$Transcription.Factor<-factor(data1$Transcription.Factor, levels = data1$Transcription.Factor)
+
+p<-ggplot(data=data1, aes(x=Transcription.Factor, y=X1st.Sample.p.value,  label = rank))+
+  geom_bar(stat = "identity" , color = "black", fill = "black", width = 0.5)+coord_flip()           
+
+p<-p  + scale_x_discrete(limits=rev(data1$Transcription.Factor))
+p<-p+ylab(label = "-Log10(p-value)") + xlab(label = "Transcription Factor")+ theme_bw() + ggtitle(label = "Diff BE vs Novel")
+
+p
+
+ggsave(plot = p, file = paste0(files.dir, "../Lisa_Diff_BEvNovel.pdf"),  width = 8, height = 10, useDingbats=FALSE)
+
+
+```
+
+# Plot expression
+
+```{r}
+all.sce <- readRDS("~/Dropbox/Postdoc/2019-12-29_BE2020/All_corrected_sce_filtered.rds")
+all.sce <- all.sce[,all.sce$include]
+all.sce <- all.sce[,all.sce$Tissue %in% c("BE", "SMG", "NSCJ") & all.sce$tissue_type != "NonEpithelial"]
+# Change cell type names for the paper
+all.sce$cell_type[all.sce$cell_type == "KRT5_cells"]<-"C1"
+all.sce$cell_type[all.sce$cell_type == "KRT5.KRT7_cells"]<-"C2"
+all.sce$cell_type[all.sce$cell_type == "KRT7_cells"]<-"C3"
+all.sce$cell_type[all.sce$cell_type == "MUC5B_cells"]<-"C4"
+
+cell.levels = c(
+  "Basal",
+  "Suprabasal",
+  "Intermediate",
+  "Superficial",
+  
+  "Undifferentiated",
+  "Endocrine",
+  "Foveolar_Intermediate",
+  "Foveolar_differentiated",
+  "Parietal",
+  "Chief",
+  
+  "Columnar_Undifferentiated",
+  "Columnar_Intermediate",
+  "Columnar_differentiated",
+  
+  "Enterocytes_Intermediate",
+  "Enterocytes_differentiated",
+  "Paneth",
+  
+  "Goblet",
+  
+  "C1",
+  "C2",
+  "C3",
+  "C4",
+  
+  "Mucous",
+  "Oncocytes",
+  "Duct_Intercalating",
+  "Myo-epithelial",
+  "Unknown.Doublets",
+  
+  "Immune",
+  "Stromal",
+  "Squamous_Esophagus",
+  "Novel"
+)
+set.seed(50014)
+jumbled<-sample(1:ncol(all.sce), ncol(all.sce), replace = FALSE)
+# Generate colours
+qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
+col_vector = unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+colours1 <- col_vector[1:30]
+colours2 <- col_vector[21:74]
+
+gene1<-"MYC"
+
+all_data <- data.frame(gene = logcounts(all.sce)[rowData(all.sce)$Symbol == gene1,],
+                       symbol = rep(gene1, ncol(all.sce)),
+                       tissue = factor(colData(all.sce)$Tissue),
+                       clusters = factor(colData(all.sce)$cell_type, levels=cell.levels))
+# all_data[all_data$tissue == "GIM",]$clusters<-as.factor(colData(all.sce)$Clusters[colData(all.sce)$Tissue=="GIM"])
+# all_data <- all_data[all_data$tissue %in% input$group,]
+
+expression.plot<-ggplot(all_data) + 
+  # geom_violin(aes(clusters, gene, fill = symbol), scale = "width") + facet_wrap(. ~ tissue)+ theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+  geom_boxplot(aes(clusters, gene, fill = symbol)) + facet_wrap(. ~ tissue)+ theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+
+ggsave(plot = expression.plot, file = paste0(files.dir, "../", gene1 , ".pdf"),  width = 15, height = 5, useDingbats=FALSE)
+
+
+gene1<-"OLFM4"
+
+all_data <- data.frame(gene = logcounts(all.sce)[rowData(all.sce)$Symbol == gene1,],
+                       symbol = rep(gene1, ncol(all.sce)),
+                       tissue = factor(colData(all.sce)$Tissue),
+                       clusters = factor(colData(all.sce)$cell_type, levels=cell.levels))
+# all_data[all_data$tissue == "GIM",]$clusters<-as.factor(colData(all.sce)$Clusters[colData(all.sce)$Tissue=="GIM"])
+# all_data <- all_data[all_data$tissue %in% input$group,]
+
+expression.plot<-ggplot(all_data) + 
+  # geom_violin(aes(clusters, gene, fill = symbol), scale = "width") + facet_wrap(. ~ tissue)+ theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+  geom_boxplot(aes(clusters, gene, fill = symbol)) + facet_wrap(. ~ tissue)+ theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+ggsave(plot = expression.plot, file = paste0(files.dir, "../", gene1 , ".pdf"),  width = 15, height = 5, useDingbats=FALSE)
+
+gene1<-"HNF4A"
+
+all_data <- data.frame(gene = logcounts(all.sce)[rowData(all.sce)$Symbol == gene1,],
+                       symbol = rep(gene1, ncol(all.sce)),
+                       tissue = factor(colData(all.sce)$Tissue),
+                       clusters = factor(colData(all.sce)$cell_type, levels=cell.levels))
+# all_data[all_data$tissue == "GIM",]$clusters<-as.factor(colData(all.sce)$Clusters[colData(all.sce)$Tissue=="GIM"])
+# all_data <- all_data[all_data$tissue %in% input$group,]
+
+expression.plot<-ggplot(all_data) + 
+  # geom_violin(aes(clusters, gene, fill = symbol), scale = "width") + facet_wrap(. ~ tissue)+ theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+  geom_boxplot(aes(clusters, gene, fill = symbol)) + facet_wrap(. ~ tissue)+ theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+ggsave(plot = expression.plot, file = paste0(files.dir, "../", gene1 , ".pdf"),  width = 15, height = 5, useDingbats=FALSE)
+
+gene1<-"CDX2"
+
+all_data <- data.frame(gene = logcounts(all.sce)[rowData(all.sce)$Symbol == gene1,],
+                       symbol = rep(gene1, ncol(all.sce)),
+                       tissue = factor(colData(all.sce)$Tissue),
+                       clusters = factor(colData(all.sce)$cell_type, levels=cell.levels))
+# all_data[all_data$tissue == "GIM",]$clusters<-as.factor(colData(all.sce)$Clusters[colData(all.sce)$Tissue=="GIM"])
+# all_data <- all_data[all_data$tissue %in% input$group,]
+
+expression.plot<-ggplot(all_data) + 
+  # geom_violin(aes(clusters, gene, fill = symbol), scale = "width") + facet_wrap(. ~ tissue)+ theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+  geom_boxplot(aes(clusters, gene, fill = symbol)) + facet_wrap(. ~ tissue)+ theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+ggsave(plot = expression.plot, file = paste0(files.dir, "../", gene1 , ".pdf"),  width = 15, height = 5, useDingbats=FALSE)
+
+
+```
+
+
+# End Matter
+
+To finish get session info:
+
+```{r Endnote, include=TRUE, echo=TRUE, warning=FALSE, eval=TRUE, message=FALSE, tidy=TRUE}
+sessionInfo()
+```
+
+
