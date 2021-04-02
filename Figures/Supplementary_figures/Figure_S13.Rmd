@@ -72,8 +72,8 @@ reducedDims(cur_sce)$TSNE <- tsne$Y
 # Tissue
 
 p.all.cells <- ggplot(data.frame(tsne1 = reducedDims(cur_sce)$TSNE[,1],
-                  tsne2 = reducedDims(cur_sce)$TSNE[,2],
-                  tissue = colData(cur_sce)$Tissue)) + 
+                                 tsne2 = reducedDims(cur_sce)$TSNE[,2],
+                                 tissue = colData(cur_sce)$Tissue)) + 
   geom_point(aes(tsne1, tsne2), colour = "black", size = 1) + 
   geom_point(aes(tsne1, tsne2, colour = tissue), size = 0.5) + 
   scale_color_manual(values = metadata(cur_sce)$colour_vector) + 
@@ -86,8 +86,8 @@ ggsave("~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Supplementary_figures/S13/Al
 
 # Tissue typse
 p.all.cells.tissue_type <- ggplot(data.frame(tsne1 = reducedDims(cur_sce)$TSNE[,1],
-                  tsne2 = reducedDims(cur_sce)$TSNE[,2],
-                  tissue = colData(cur_sce)$tissue_type)) +
+                                             tsne2 = reducedDims(cur_sce)$TSNE[,2],
+                                             tissue = colData(cur_sce)$tissue_type)) +
   geom_point(aes(tsne1, tsne2), colour = "black", size = 1) + 
   geom_point(aes(tsne1, tsne2, colour = tissue), size = 0.5) + 
   scale_color_manual(values = c("darkblue", "grey40", "darkred" )) + 
@@ -127,8 +127,8 @@ colour_vector["KRT5.KRT7_cells"] <- "burlywood4"
 colour_vector["KRT5_cells"] <- "orange"
 
 p.all.cells.cell_type <- ggplot(data.frame(tsne1 = reducedDims(cur_sce)$TSNE[,1],
-                  tsne2 = reducedDims(cur_sce)$TSNE[,2],
-                  tissue = colData(cur_sce)$cell_type)) +
+                                           tsne2 = reducedDims(cur_sce)$TSNE[,2],
+                                           tissue = colData(cur_sce)$cell_type)) +
   geom_point(aes(tsne1, tsne2), colour = "black", size = 1) + 
   geom_point(aes(tsne1, tsne2, colour = tissue), size = 0.5) + 
   scale_color_manual(values = colour_vector) + 
@@ -148,8 +148,8 @@ names(colour_vector) <- unique(cur_sce$Patient)
 colour_vector <- brewer.pal(12, "Set3")
 
 p.all.cells.patient <- ggplot(data.frame(tsne1 = reducedDims(cur_sce)$TSNE[,1],
-                  tsne2 = reducedDims(cur_sce)$TSNE[,2],
-                  tissue = colData(cur_sce)$Patient)) +
+                                         tsne2 = reducedDims(cur_sce)$TSNE[,2],
+                                         tissue = colData(cur_sce)$Patient)) +
   geom_point(aes(tsne1, tsne2), colour = "black", size = 1) + 
   geom_point(aes(tsne1, tsne2, colour = tissue), size = 0.5) + 
   scale_color_manual(values = colour_vector) + 
@@ -160,6 +160,52 @@ p.all.cells.patient <- ggplot(data.frame(tsne1 = reducedDims(cur_sce)$TSNE[,1],
 p.all.cells.patient
 
 ggsave("~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Supplementary_figures/S13/Patient.pdf", p.all.cells.patient, width = 7, height = 5, useDingbats = FALSE)
+
+# Visualize tSNEs
+# Tissue only BSCJ visable
+noBSCJ<-ifelse(cur_sce$Tissue == "BSCJ" & cur_sce$tissue_type != "NonEpithelial", yes = "BSCJ", no = "Other")
+cur_sce2<-cur_sce[c(which(noBSCJ != "BSCJ"),which(noBSCJ == "BSCJ")) , ]
+noBSCJ<-ifelse(cur_sce2$Tissue == "BSCJ" & cur_sce2$tissue_type != "NonEpithelial", yes = "BSCJ", no = "Other")
+
+p.BSCJ.cells <- ggplot() + 
+  geom_point(data = data.frame(tsne1 = reducedDims(cur_sce2)$TSNE[which(noBSCJ != "BSCJ"),1],
+                               tsne2 = reducedDims(cur_sce2)$TSNE[which(noBSCJ != "BSCJ"),2],
+                               tissue = colData(cur_sce2)$Tissue[which(noBSCJ != "BSCJ")],
+                               noBSCJ = noBSCJ[which(noBSCJ != "BSCJ")]), 
+             aes(tsne1, tsne2, alpha = noBSCJ), colour = "black", size = 1) + 
+  geom_point(data = data.frame(tsne1 = reducedDims(cur_sce2)$TSNE[which(noBSCJ != "BSCJ"),1],
+                               tsne2 = reducedDims(cur_sce2)$TSNE[which(noBSCJ != "BSCJ"),2],
+                               tissue = colData(cur_sce2)$Tissue[which(noBSCJ != "BSCJ")],
+                               noBSCJ = noBSCJ[which(noBSCJ != "BSCJ")]),
+             aes(tsne1, tsne2, colour = noBSCJ, alpha = noBSCJ), size = 0.5) + 
+  # scale_alpha_manual(values = c("BSCJ" = 1 , "Other" = 0.01)) +
+  
+  # scale_color_manual(values = c("BSCJ" = "#DC0000FF", "Other" =  "grey")) +
+    geom_point(data = data.frame(tsne1 = reducedDims(cur_sce2)$TSNE[which(noBSCJ == "BSCJ"),1],
+                               tsne2 = reducedDims(cur_sce2)$TSNE[which(noBSCJ == "BSCJ"),2],
+                               tissue = colData(cur_sce2)$Tissue[which(noBSCJ == "BSCJ")],
+                               noBSCJ = noBSCJ[which(noBSCJ == "BSCJ")]), 
+             aes(tsne1, tsne2, alpha = noBSCJ), colour = "black", size = 1) + 
+  geom_point(data = data.frame(tsne1 = reducedDims(cur_sce2)$TSNE[which(noBSCJ == "BSCJ"),1],
+                               tsne2 = reducedDims(cur_sce2)$TSNE[which(noBSCJ == "BSCJ"),2],
+                               tissue = colData(cur_sce2)$Tissue[which(noBSCJ == "BSCJ")],
+                               noBSCJ = noBSCJ[which(noBSCJ == "BSCJ")]),
+             aes(tsne1, tsne2, colour = noBSCJ, alpha = noBSCJ), size = 0.5) + 
+  
+  scale_alpha_manual(values = c("BSCJ" = 1 , "Other" = 0.01)) +
+  scale_color_manual(values = c("BSCJ" = "#DC0000FF", "Other" =  "grey")) +
+  
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        axis.line = element_line(colour = "grey"))
+p.BSCJ.cells
+
+p.BSCJ.cells + theme_void() + theme(legend.position = "none") 
+ggsave("~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Supplementary_figures/S13/BSCJ_cells.pdf", p.BSCJ.cells , width = 7, height = 5, useDingbats = FALSE)
+ggsave("~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Supplementary_figures/S13/BSCJ_cells.png", p.BSCJ.cells + theme_void() + theme(legend.position = "none") , dpi = 600, width = 6, height = 5)
+
+
 ```
 
 # Differential expression analysis
