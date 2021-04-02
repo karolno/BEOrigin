@@ -362,9 +362,48 @@ gland.groups.tissues <- ggplot() +
         panel.background = element_blank(), 
         axis.line = element_line(colour = "grey"))
 gland.groups.tissues
+
+
+# Visualize tissue composition of gland like cells showing only our SMG and Owen glandlike cells
+ImmuneTF[1:(ncol(corrected)-n.owen)][!(tissues.all[1:(ncol(corrected)-n.owen)] %in% c("SMG"))] <- "nonepi"
+
+
+tissue.gland <- c(rep(NA, length(tissues)), 
+                  as.character(unlist(lapply(owen.list, function(n){n$gland_cells_k3}))))
+gland.only.groups.tissues <- ggplot() +
+  geom_point(data = data.frame(
+    tsne1 = tsne$Y[1:(ncol(corrected)-n.owen),1],
+    tsne2 = tsne$Y[1:(ncol(corrected)-n.owen),2],
+    tissue = tissues.all[1:(ncol(corrected)-n.owen)],
+    ImmuneTF =ImmuneTF[1:(ncol(corrected)-n.owen)]
+  ), 
+  aes(tsne1, tsne2, colour = tissue, alpha = ImmuneTF), size = 1) +
+  geom_point(data = data.frame(
+    tsne1 = tsne$Y[!is.na(tissue.gland),1],
+    tsne2 = tsne$Y[!is.na(tissue.gland),2],
+    ImmuneTF =ImmuneTF[!is.na(tissue.gland)]
+    ), 
+    aes(tsne1, tsne2, alpha = ImmuneTF), size = 2, colour = "black") +
+  geom_point(data = data.frame(
+    tsne1 = tsne$Y[!is.na(tissue.gland),1],
+    tsne2 = tsne$Y[!is.na(tissue.gland),2],
+    tissue = tissues.all[!is.na(tissue.gland)],
+    ImmuneTF =ImmuneTF[!is.na(tissue.gland)]
+  ), 
+  aes(tsne1, tsne2, colour = tissue, alpha = ImmuneTF), size = 1) + 
+  scale_color_manual(values = colour_vector) +
+  scale_alpha_manual(values = c("epi" = 1 , "nonepi" = 0.005)) +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        axis.line = element_line(colour = "grey"))
+gland.only.groups.tissues
+
+
 # Save plots
 ggsave("~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Supplementary_figures/S5/All_owen_data.pdf", owen.all.tissues, width = 6, height = 5, useDingbats = FALSE)
 ggsave("~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Supplementary_figures/S5/Glandlike_owen_data.pdf", gland.groups.tissues, width = 6, height = 5, useDingbats = FALSE)
+ggsave("~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Supplementary_figures/S5/Glandlike_and_SMG_owen_data.pdf", gland.only.groups.tissues, width = 6, height = 5, useDingbats = FALSE)
 ```
 
 # Comparison to HCA data
