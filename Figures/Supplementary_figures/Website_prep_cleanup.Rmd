@@ -214,7 +214,8 @@ p.gene.expression<-ggplot(data.frame(tSNE1 =  reducedDims(sce.all)$TSNE[,1],
                                      tSNE2 =  reducedDims(sce.all)$TSNE[,2],
                                      gene = counts(sce.all)[rowData(sce.all)$Symbol == gene,]))  +
   # gene = logcounts(sce.all)[rowData(sce.all)$Symbol == gene,][jumbled]))  +
-  geom_point(aes(tSNE1, tSNE2, colour = gene), size = 0.5) + scale_colour_viridis(option = "A", name = "log2(Expr)") +
+  geom_point(aes(tSNE1, tSNE2, colour = gene), size = 0.5) + 
+  scale_colour_viridis(option = "A", name = "log2(Expr)") +
   guides(alpha=FALSE) + ggtitle(gene) + theme(panel.grid.major = element_blank(), 
                                               panel.grid.minor = element_blank(),
                                               panel.background = element_blank(), 
@@ -223,7 +224,10 @@ p.gene.expression
 
 tsne.corrected <- ggplot(data.frame(tsne1 = reducedDims(sce.all)$TSNE[,1], tsne2 = reducedDims(sce.all)$TSNE[,2], 
                                     Tissue = colData(sce.all)$Tissue)) + 
-  geom_point(aes(tsne1, tsne2, colour = Tissue)) + scale_color_manual(values = annot.col) + theme_void()
+  geom_point(aes(tsne1, tsne2), size = 1, color = "black") + 
+  geom_point(aes(tsne1, tsne2, colour = Tissue), size = 0.5) + 
+  scale_color_manual(values = annot.col) + 
+  theme_void()
 tsne.corrected 
 
 
@@ -234,9 +238,16 @@ ggsave("~/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/alldata.pdf",
        tsne.corrected, 
        width = 8, height = 7, useDingbats = FALSE)
 
-sceasy:::convertFormat(sce.all, from="sce", to="anndata",
-                       outFile="/home/karolno/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/alldata.h5ad")
-saveRDS(sce.all, "~/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/alldata.rds")
+ggsave("~/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/alldata.png", 
+       tsne.corrected, 
+       width = 8, height = 7, dpi = 600)
+
+
+
+
+# sceasy:::convertFormat(sce.all, from="sce", to="anndata",
+#                        outFile="/home/karolno/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/alldata.h5ad")
+# saveRDS(sce.all, "~/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/alldata.rds")
 ```
 
 # All data High quality
@@ -420,7 +431,10 @@ p.gene.expression
 
 tsne.corrected <- ggplot(data.frame(tsne1 = reducedDims(sce.all)$TSNE[,1], tsne2 = reducedDims(sce.all)$TSNE[,2], 
                                     Tissue = colData(sce.all)$Tissue)) + 
-  geom_point(aes(tsne1, tsne2, colour = Tissue)) + scale_color_manual(values = annot.col) + theme_void()
+  geom_point(aes(tsne1, tsne2), size = 1, color = "black") + 
+  geom_point(aes(tsne1, tsne2, colour = Tissue), size = 0.5) + 
+  scale_color_manual(values = annot.col) + 
+  theme_void()
 tsne.corrected 
 
 
@@ -431,9 +445,13 @@ ggsave("~/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/alldatahighquality.pdf"
        tsne.corrected, 
        width = 8, height = 7, useDingbats = FALSE)
 
-sceasy:::convertFormat(sce.all, from="sce", to="anndata",
-                       outFile="/home/karolno/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/alldatahighquality.h5ad")
-saveRDS(sce.all, "~/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/alldatahighquality.rds")
+ggsave("~/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/alldatahighquality.png", 
+       tsne.corrected, 
+       width = 8, height = 7, dpi = 600)
+
+# sceasy:::convertFormat(sce.all, from="sce", to="anndata",
+#                        outFile="/home/karolno/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/alldatahighquality.h5ad")
+# saveRDS(sce.all, "~/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/alldatahighquality.rds")
 ```
 
 # Individual Tissues
@@ -443,6 +461,7 @@ Fix the annotation of individual tissues
 ```{r Individual, message=FALSE}
 for (tissue in c("SMG", "NSCJ", "NE", "NG", "ND", "BE")) {
   # Read in the normalized and batch-corrected reads
+  tissue <- "SMG"
   sce.all <- readRDS(paste0("~/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/old/", tissue, ".rds"))
   
   annot.col <- vector(length = 8)
@@ -587,7 +606,7 @@ for (tissue in c("SMG", "NSCJ", "NE", "NG", "ND", "BE")) {
   
   if(tissue == "NSCJ") {
     levels(colData(sce.all)$cell_type_secondary)[11:14]<-paste0("C", 1:4)
-
+    
   }
   
   colData(sce.all)$tissue_type <- factor(colData(sce.all)$tissue_type, levels = c("Squamous", "Columnar", "Glandular", "NonEpithelial"))
@@ -626,8 +645,9 @@ for (tissue in c("SMG", "NSCJ", "NE", "NG", "ND", "BE")) {
   
   tsne.corrected <- ggplot(data.frame(tsne1 = reducedDims(sce.all)$TSNE[,1], tsne2 = reducedDims(sce.all)$TSNE[,2], 
                                       Cell_Type = colData(sce.all)$cell_type)) + 
+      # geom_point(aes(tsne1, tsne2), size = 1, color = "black") + 
     geom_point(aes(tsne1, tsne2, colour = Cell_Type)) +
-    # scale_color_manual(values = annot.col) + 
+    # geom_point(aes(tsne1, tsne2, colour = Cell_Type), size = 0.5) +
     theme_void()
   print(tsne.corrected)
   
@@ -638,6 +658,9 @@ for (tissue in c("SMG", "NSCJ", "NE", "NG", "ND", "BE")) {
   ggsave(paste0("~/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/", tissue, ".pdf"), 
          tsne.corrected, 
          width = 8, height = 7, useDingbats = FALSE)
+  # ggsave(paste0("~/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/", tissue, ".png"), 
+  #        tsne.corrected, 
+  #        width = 8, height = 7, dpi = 600)
   
   sceasy:::convertFormat(sce.all, from="sce", to="anndata",
                          outFile=paste0("/home/karolno/Dropbox/Postdoc/2019-12-29_BE2020/Website_data/", tissue, ".h5ad"))
