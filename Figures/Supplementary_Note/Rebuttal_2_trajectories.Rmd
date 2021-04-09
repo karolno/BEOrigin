@@ -122,7 +122,7 @@ colnames(ids)<-c("id", "patient")
 # write.csv(as.matrix(mat.hvg), file = "~/Dropbox/Postdoc/2019-12-29_BE2020/Trajectory/FLE/Data/hvg_all.csv")
 
 sceasy:::convertFormat(sce[top.sce,], from="sce", to="anndata",
-                         outFile="/home/karolno/Dropbox/Postdoc/2019-12-29_BE2020/Trajectory/FLE/Data/hvg_all.h5ad")
+                       outFile="/home/karolno/Dropbox/Postdoc/2019-12-29_BE2020/Trajectory/FLE/Data/hvg_all.h5ad")
 
 write.table(ids, file = "~/Dropbox/Postdoc/2019-12-29_BE2020/Trajectory/FLE/Data/ids_all.txt", sep = "\t", quote = FALSE, row.names = FALSE)
 
@@ -194,6 +194,53 @@ reducedDims(sce)$dm <- dm@eigenvectors[,1:2]
 
 ```{r}
 # Identify non epithelial clusters
+# all cells
+colour.scheme<-c(
+  "Basal"	= "#D8AAAA",
+  "Suprabasal" = "#BE7171",
+  "Suprabasal_Dividing"	= "#FFFFFF",
+  "Intermediate" = "#A43838",
+  "Superficial" = "#8B0000",
+  
+  "Undifferentiated"= "#D7EFF5",
+  "Undifferentiated_Dividing"= "#FFFFFF",
+  "Foveolar_Intermediate"= "#9CD9E7",
+  "Foveolar_differentiated" = "#4DBBD5",
+  "Endocrine_GHRL" = "#5900D8",
+  "Endocrine_CHGA" = "#9055E5",
+  "Endocrine_NEUROD1" = "#C7AAF2",
+  "Parietal" = "#C6C6E5",
+  "Chief" = "#7171BE",
+  
+  "KRT5_cells" = "#ffa500",
+  "KRT5.KRT7_cells" = "#8b7355",
+  "KRT7_cells" = "#cdaa7d",
+  "MUC5B_cells" = "#8b4513",
+  
+  "Endocrine_NEUROG3" =	"#8DBA8D",
+  "Columnar_Undifferentiated"	= "#FFFFFF",
+  "Columnar_Undifferentiated_Dividing" = "#E2F4F1",
+  "Columnar_Intermediate" = "#AADFD7",
+  "Columnar_differentiated" = "#71CABC",
+  "Goblet" = "#006400",
+  
+  "Mucous_MUC5B_High" = "#8b4513",
+  "Oncocytes_MUC5B_Low" = "#cdaa7d",
+  "Duct_Intercalating" = "#8b7355",
+  "Myo-epithelial" = "#a52a2a"
+  
+)
+
+
+<-c("NE_Basal","NE_Suprabasal","NE_Suprabasal-Dividing", "NE_Intermediate", "NE_Superficial",
+    "NG_Undifferentiated", "NG_Undifferentiated-Dividing", "NG_Foveolar-Intermediate", "NG_Foveolar-differentiated", "NG_Chief", "NG_Parietal", "NG_Endocrine-GHRL", "NG_Endocrine-CHGA", "NG_Endocrine-NEUROD1",
+    "BE_Columnar-Undifferentiated", "BE_Columnar-Undifferentiated-Dividing", "BE_Endocrine-NEUROG3", "BE_Columnar-Intermediate", "BE_Columnar-differentiated", "BE_Goblet",
+    "SMG_Duct-Intercalating", "SMG_Oncocytes-MUC5B-Low", "SMG_Mucous-MUC5B-High",
+    "ALL_Immune-T-cells", "ALL_Immune-B-cells", "ALL_Immune-Macrophages",
+    "ALL_Stromal-CALD1-cells", "ALL_Stromal-ADH1B-cells", "ALL_Stromal-GNG11-cells" 
+)
+
+
 g <- buildSNNGraph(corrected, k = 5)
 clusters <- igraph::cluster_louvain(g)$membership
 good.clusters <- c(1:max(clusters))[table(factor(clusters[sce$tissue_type != "NonEpithelial"], levels = 1:max(clusters) ))/table(clusters)>0.95]
@@ -211,10 +258,10 @@ set.seed(10101)
 line.data <- reportEdges(by.cluster, mst=pseudo.mnn$mst, clusters=NULL, use.dimred="dm")
 
 DM.plot<-ggplot(data.frame(dm1 = reducedDims(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters])$dm[,1],
-                  dm2 = reducedDims(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters])$dm[,2],
-                  Tissue = as.factor(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]$Tissue),
-                  Cluster = as.factor(clusters[!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]),
-                  Cell =  as.factor(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]$cell_type_secondary)
+                           dm2 = reducedDims(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters])$dm[,2],
+                           Tissue = as.factor(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]$Tissue),
+                           Cluster = as.factor(clusters[!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]),
+                           Cell =  as.factor(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]$cell_type_secondary)
 )) + 
   geom_point(aes(dm1, dm2, colour = Cell), size = 0.5) + 
   geom_line(data=line.data, mapping=aes(x=DC1, y=DC2, group=edge)) + theme_minimal()
@@ -223,10 +270,10 @@ DM.plot
 ggsave("~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Rebuttal/DM.plot.pdf", DM.plot, width = 15, height = 5, useDingbats = FALSE)
 
 DM.plot.tissue<-ggplot(data.frame(dm1 = reducedDims(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters])$dm[,1],
-                  dm2 = reducedDims(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters])$dm[,2],
-                  Tissue = as.factor(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]$Tissue),
-                  Cluster = as.factor(clusters[!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]),
-                  Cell =  as.factor(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]$cell_type_secondary)
+                                  dm2 = reducedDims(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters])$dm[,2],
+                                  Tissue = as.factor(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]$Tissue),
+                                  Cluster = as.factor(clusters[!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]),
+                                  Cell =  as.factor(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]$cell_type_secondary)
 )) + 
   geom_point(aes(dm1, dm2, colour = Tissue), size = 0.5) + 
   geom_line(data=line.data, mapping=aes(x=DC1, y=DC2, group=edge)) + theme_minimal()
@@ -238,25 +285,29 @@ ggsave("~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Rebuttal/DM.plot.tissue.pdf"
 line.data <- reportEdges(by.cluster, mst=pseudo.mnn$mst, clusters=NULL, use.dimred="TSNE")
 
 TSNE.plot<-ggplot(data.frame(tsne1 = reducedDims(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters])$TSNE[,1],
-                  tsne2 = reducedDims(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters])$TSNE[,2],
-                  Tissue = as.factor(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]$Tissue),
-                  Cluster = as.factor(clusters[!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]),
-                  Cell =  as.factor(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]$cell_type_secondary)
+                             tsne2 = reducedDims(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters])$TSNE[,2],
+                             Tissue = as.factor(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]$Tissue),
+                             Cluster = as.factor(clusters[!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]),
+                             Cell =  factor(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]$cell_type_secondary, levels = names(colour.scheme))
 )) + 
   geom_point(aes(tsne1, tsne2, colour = Cell), size = 0.5) + 
-  geom_line(data=line.data, mapping=aes(x=dim1, y=dim2, group=edge)) + theme_minimal()
+  geom_line(data=line.data, mapping=aes(x=dim1, y=dim2, group=edge)) +   
+  scale_colour_manual(values = colour.scheme) +
+  theme_minimal()
 
 TSNE.plot
 ggsave("~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Rebuttal/TSNE.plot.pdf", TSNE.plot, width = 15, height = 5, useDingbats = FALSE)
 
 TSNE.plot.tissue<-ggplot(data.frame(tsne1 = reducedDims(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters])$TSNE[,1],
-                  tsne2 = reducedDims(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters])$TSNE[,2],
-                  Tissue = as.factor(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]$Tissue),
-                  Cluster = as.factor(clusters[!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]),
-                  Cell =  as.factor(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]$cell_type_secondary)
+                                    tsne2 = reducedDims(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters])$TSNE[,2],
+                                    Tissue = as.factor(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]$Tissue),
+                                    Cluster = as.factor(clusters[!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]),
+                                    Cell =  as.factor(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]$cell_type_secondary)
 )) + 
   geom_point(aes(tsne1, tsne2, colour = Tissue), size = 0.5) + 
-  geom_line(data=line.data, mapping=aes(x=dim1, y=dim2, group=edge)) + theme_minimal()
+  geom_line(data=line.data, mapping=aes(x=dim1, y=dim2, group=edge)) +
+  scale_colour_manual(values = metadata(sce)$colour_vector) +
+  theme_minimal() 
 
 TSNE.plot.tissue
 ggsave("~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Rebuttal/TSNE.plot.tissue.pdf", TSNE.plot.tissue, width = 10, height = 5, useDingbats = FALSE)
@@ -264,10 +315,10 @@ ggsave("~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Rebuttal/TSNE.plot.tissue.pd
 line.data <- reportEdges(by.cluster, mst=pseudo.mnn$mst, clusters=NULL, use.dimred="fle")
 
 FLE.plot<-ggplot(data.frame(fle1 = reducedDims(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters])$fle[,1],
-                  fle2 = reducedDims(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters])$fle[,2],
-                  Tissue = as.factor(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]$Tissue),
-                  Cluster = as.factor(clusters[!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]),
-                  Cell =  as.factor(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]$cell_type_secondary)
+                            fle2 = reducedDims(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters])$fle[,2],
+                            Tissue = as.factor(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]$Tissue),
+                            Cluster = as.factor(clusters[!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]),
+                            Cell =  as.factor(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]$cell_type_secondary)
 )) + 
   geom_point(aes(fle1, fle2, colour = Cell), size = 0.5) + 
   geom_line(data=line.data, mapping=aes(x=X0, y=X1, group=edge)) + theme_minimal()
@@ -276,10 +327,10 @@ FLE.plot
 ggsave("~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Rebuttal/FLE.plot.pdf", FLE.plot, width = 15, height = 5, useDingbats = FALSE)
 
 FLE.plot.tissue<-ggplot(data.frame(fle1 = reducedDims(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters])$fle[,1],
-                  fle2 = reducedDims(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters])$fle[,2],
-                  Tissue = as.factor(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]$Tissue),
-                  Cluster = as.factor(clusters[!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]),
-                  Cell =  as.factor(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]$cell_type_secondary)
+                                   fle2 = reducedDims(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters])$fle[,2],
+                                   Tissue = as.factor(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]$Tissue),
+                                   Cluster = as.factor(clusters[!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]),
+                                   Cell =  as.factor(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]$cell_type_secondary)
 )) + 
   geom_point(aes(fle1, fle2, colour = Tissue), size = 0.5) + 
   geom_line(data=line.data, mapping=aes(x=X0, y=X1, group=edge)) + theme_minimal()
