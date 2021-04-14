@@ -290,27 +290,28 @@ TSNE.plot<-ggplot(data.frame(tsne1 = reducedDims(sce[,!(sce$cell_type %in% c("Im
                              Cluster = as.factor(clusters[!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]),
                              Cell =  factor(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]$cell_type_secondary, levels = names(colour.scheme))
 )) + 
+  geom_point(aes(tsne1, tsne2), size = 1, color = "black") +
   geom_point(aes(tsne1, tsne2, colour = Cell), size = 0.5) + 
   geom_line(data=line.data, mapping=aes(x=dim1, y=dim2, group=edge)) +   
   scale_colour_manual(values = colour.scheme) +
-  theme_minimal()
+  theme_void()
 
 TSNE.plot
-ggsave("~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Rebuttal/TSNE.plot.pdf", TSNE.plot, width = 15, height = 5, useDingbats = FALSE)
-
+ggsave("~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Rebuttal/TSNE.plot.pdf", TSNE.plot, width = 10, height = 5, useDingbats = FALSE)
+jittered <- sample(ncol(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]))
 TSNE.plot.tissue<-ggplot(data.frame(tsne1 = reducedDims(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters])$TSNE[,1],
                                     tsne2 = reducedDims(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters])$TSNE[,2],
                                     Tissue = as.factor(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]$Tissue),
                                     Cluster = as.factor(clusters[!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]),
                                     Cell =  as.factor(sce[,!(sce$cell_type %in% c("Immune", "Stromal")) & clusters %in% good.clusters]$cell_type_secondary)
-)) + 
+)[jittered,]) + 
   geom_point(aes(tsne1, tsne2, colour = Tissue), size = 0.5) + 
   geom_line(data=line.data, mapping=aes(x=dim1, y=dim2, group=edge)) +
   scale_colour_manual(values = metadata(sce)$colour_vector) +
   theme_minimal() 
 
 TSNE.plot.tissue
-ggsave("~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Rebuttal/TSNE.plot.tissue.pdf", TSNE.plot.tissue, width = 10, height = 5, useDingbats = FALSE)
+ggsave("~/Dropbox/Postdoc/2019-12-29_BE2020/Figures/Rebuttal/TSNE.plot.tissue.pdf", TSNE.plot.tissue, width = 7, height = 5, useDingbats = FALSE)
 
 line.data <- reportEdges(by.cluster, mst=pseudo.mnn$mst, clusters=NULL, use.dimred="fle")
 
