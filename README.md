@@ -1,4 +1,4 @@
-## Supporting code for "Deep molecular phenotyping reveals the identity of Barrett’s esophagus and its malignant transition" manuscript
+## Supporting code for "Molecular phenotyping reveals the identity of Barrett’s esophagus and its malignant transition" manuscript
 
 This repository contains all steps required for analysis and production of figures as presented in the "Deep molecular phenotyping reveals the identity of Barrett’s esophagus and its malignant transition" manuscript. Scripts are split into the following folders:
 
